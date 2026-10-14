@@ -21,6 +21,13 @@ public class DTHImportWizard : ModuleRules
 			"ToolMenus",
 			"UnrealEd",
 			"WorkspaceMenuStructure",
+			"DeveloperSettings",
+			"Json",
+			"PropertyEditor",
+			"DesktopPlatform",
+			"InterchangeCore",
+			"InterchangeEngine",
+			"InterchangePipelines",
 		});
 	}
 }

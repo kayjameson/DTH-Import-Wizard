@@ -1,5 +1,7 @@
 #include "DTHImportWizardModule.h"
 
+#include "DTHImportLog.h"
+
 #include "Framework/Docking/TabManager.h"
 #include "Styling/AppStyle.h"
 #include "ToolMenus.h"
@@ -9,6 +11,8 @@
 #include "WorkspaceMenuStructureModule.h"
 
 #define LOCTEXT_NAMESPACE "DTHImportWizard"
+
+DEFINE_LOG_CATEGORY(LogDTHImport);
 
 const FName FDTHImportWizardModule::WizardTabName(TEXT("DTHImportWizard"));
 

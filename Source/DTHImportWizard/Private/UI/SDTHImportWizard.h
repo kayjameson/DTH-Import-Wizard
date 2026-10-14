@@ -1,7 +1,12 @@
 #pragma once
 
 #include "Widgets/SCompoundWidget.h"
+#include "Widgets/Views/SListView.h"
 
+class FDTHExport;
+class IDetailsView;
+class ITableRow;
+class STableViewBase;
 class SWidgetSwitcher;
 
 /** The wizard's tab content: export picker, step bar, the page for each step and the action bar. */
@@ -24,11 +29,57 @@ private:
 		Count
 	};
 
+	/** A mesh row on the Meshes page. */
+	struct FMeshRow
+	{
+		int32 MeshIndex = INDEX_NONE;
+		bool bImport = false;
+	};
+
+	struct FMessage
+	{
+		enum class ESeverity : uint8 { Info, Warning, Error };
+		ESeverity Severity = ESeverity::Info;
+		FText Text;
+	};
+
+	// Layout
 	TSharedRef<SWidget> MakeExportBar();
 	TSharedRef<SWidget> MakeStepBar();
-	TSharedRef<SWidget> MakePage(const FText& Title, const FText& Body);
+	TSharedRef<SWidget> MakeSettingsPage();
+	TSharedRef<SWidget> MakeMeshesPage();
+	TSharedRef<SWidget> MakePlaceholderPage(const FText& Title, const FText& Body);
+	TSharedRef<SWidget> MakeImportPage();
 	TSharedRef<SWidget> MakeActionBar();
+	TSharedRef<SWidget> MakeSection(const FText& Title, const TSharedRef<SWidget>& Content);
+
+	TSharedRef<ITableRow> MakeMeshRow(TSharedPtr<FMeshRow> Row, const TSharedRef<STableViewBase>& Owner);
+	TSharedRef<ITableRow> MakeMessageRow(TSharedPtr<FMessage> Message, const TSharedRef<STableViewBase>& Owner);
+
+	// Actions
+	FReply OnBrowseExport();
+	void LoadExport(const FString& Folder);
+	FReply OnImport();
+	bool CanImport() const;
+	void AddMessage(FMessage::ESeverity Severity, const FText& Text);
+
+	FText GetExportFolderText() const;
+	FText GetStatusText() const;
+	FText GetExportSummary() const;
 
 	EPage CurrentPage = EPage::ProjectSettings;
 	TSharedPtr<SWidgetSwitcher> Pages;
+	TSharedPtr<IDetailsView> SettingsView;
+
+	TSharedPtr<FDTHExport> Export;
+	FString ExportFolder;
+	FString ExportError;
+	FString DestinationFolder;
+	FString SkeletonPath;
+
+	TArray<TSharedPtr<FMeshRow>> MeshRows;
+	TSharedPtr<SListView<TSharedPtr<FMeshRow>>> MeshList;
+
+	TArray<TSharedPtr<FMessage>> Messages;
+	TSharedPtr<SListView<TSharedPtr<FMessage>>> MessageList;
 };
