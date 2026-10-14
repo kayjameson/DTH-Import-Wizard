@@ -28,6 +28,8 @@ public class DTHImportWizard : ModuleRules
 			"InterchangeCore",
 			"InterchangeEngine",
 			"InterchangePipelines",
+			"AssetTools",
+			"SkeletalMeshEditor",
 		});
 	}
 }

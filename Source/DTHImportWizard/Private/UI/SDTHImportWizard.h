@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Steps/DTHImportReport.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Views/SListView.h"
 
@@ -36,12 +37,7 @@ private:
 		bool bImport = false;
 	};
 
-	struct FMessage
-	{
-		enum class ESeverity : uint8 { Info, Warning, Error };
-		ESeverity Severity = ESeverity::Info;
-		FText Text;
-	};
+	using FMessage = FDTHImportMessage;
 
 	// Layout
 	TSharedRef<SWidget> MakeExportBar();
@@ -76,6 +72,7 @@ private:
 	FString ExportError;
 	FString DestinationFolder;
 	FString SkeletonPath;
+	bool bReimportExistingMeshes = false;
 
 	TArray<TSharedPtr<FMeshRow>> MeshRows;
 	TSharedPtr<SListView<TSharedPtr<FMeshRow>>> MeshList;

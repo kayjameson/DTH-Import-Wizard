@@ -12,7 +12,7 @@
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
 #include "Settings/DTHImportSettings.h"
-#include "Steps/DTHMeshImport.h"
+#include "Steps/DTHImportRun.h"
 #include "Steps/DTHSkeleton.h"
 #include "Styling/AppStyle.h"
 #include "Styling/StyleColors.h"
@@ -242,6 +242,16 @@ TSharedRef<SWidget> SDTHImportWizard::MakeMeshesPage()
 						SNew(SEditableTextBox)
 						.Text_Lambda([this]() { return FText::FromString(DestinationFolder); })
 						.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type) { DestinationFolder = Text.ToString(); })
+					]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.f, 0.f, 0.f, 0.f)
+					[
+						SNew(SCheckBox)
+						.IsChecked_Lambda([this]() { return bReimportExistingMeshes ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+						.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { bReimportExistingMeshes = State == ECheckBoxState::Checked; })
+						.ToolTipText(LOCTEXT("ReimportTip", "Replace meshes that already exist in the destination. Otherwise they are reused and only the setup steps run."))
+						[
+							SNew(STextBlock).Text(LOCTEXT("Reimport", "Reimport existing meshes"))
+						]
 					])
 			]
 
@@ -403,7 +413,7 @@ TSharedRef<SWidget> SDTHImportWizard::MakeActionBar()
 				.ButtonStyle(FAppStyle::Get(), "PrimaryButton")
 				.IsEnabled(this, &SDTHImportWizard::CanImport)
 				.OnClicked(this, &SDTHImportWizard::OnImport)
-				.ToolTipText(LOCTEXT("ImportTip", "Import the ticked meshes"))
+				.ToolTipText(LOCTEXT("ImportTip", "Import the ticked meshes and set up the character"))
 				[
 					SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 4.f, 0.f)
@@ -482,38 +492,29 @@ bool SDTHImportWizard::CanImport() const
 
 FReply SDTHImportWizard::OnImport()
 {
-	FString Error;
-	USkeleton* Skeleton = DTHImport::LoadSkeletonFor(*Export, Error);
-	CurrentPage = EPage::Import;
-	AddMessage(FMessage::ESeverity::Info, FText::Format(LOCTEXT("ImportStart", "Importing {0} into {1}"),
-		FText::FromString(Export->Character), FText::FromString(DestinationFolder)));
-	if (!Skeleton)
+	FDTHImportRequest Request;
+	Request.Export = Export;
+	Request.DestinationFolder = DestinationFolder;
+	Request.bReimportExistingMeshes = bReimportExistingMeshes;
+	for (const TSharedPtr<FMeshRow>& Row : MeshRows)
 	{
-		AddMessage(FMessage::ESeverity::Error, FText::FromString(Error));
-		return FReply::Handled();
+		if (Row->bImport)
+		{
+			Request.MeshIndices.Add(Row->MeshIndex);
+		}
 	}
-
-	TArray<TSharedPtr<FMeshRow>> Ticked = MeshRows.FilterByPredicate([](const TSharedPtr<FMeshRow>& Row) { return Row->bImport; });
-	FScopedSlowTask Task(Ticked.Num(), LOCTEXT("ImportingMeshes", "Importing skeletal meshes"));
-	Task.MakeDialog(true);
-	for (const TSharedPtr<FMeshRow>& Row : Ticked)
+	CurrentPage = EPage::Import;
+	const FDTHImportReport Report = DTHImport::RunImport(Request);
+	for (const FDTHImportMessage& Message : Report.Messages)
 	{
-		if (Task.ShouldCancel())
+		AddMessage(Message.Severity, Message.Text);
+	}
+	for (const FDTHManualStep& Step : Report.ManualSteps)
+	{
+		AddMessage(FMessage::ESeverity::Warning, FText::Format(LOCTEXT("ManualStep", "Manual step: {0}"), Step.Title));
+		for (const FText& Line : Step.Instructions)
 		{
-			AddMessage(FMessage::ESeverity::Warning, LOCTEXT("Cancelled", "Cancelled."));
-			break;
-		}
-		const FDTHMeshEntry& Mesh = Export->Meshes[Row->MeshIndex];
-		Task.EnterProgressFrame(1.f, FText::FromString(FPaths::GetCleanFilename(Mesh.File)));
-		FString MeshError;
-		if (USkeletalMesh* Imported = DTHImport::ImportSkeletalMesh(Mesh.File, DestinationFolder, Skeleton, MeshError))
-		{
-			AddMessage(FMessage::ESeverity::Info, FText::Format(LOCTEXT("MeshDone", "{0}: {1} material slots, {2} morph targets"),
-				FText::FromString(Imported->GetPathName()), Imported->GetMaterials().Num(), Imported->GetMorphTargets().Num()));
-		}
-		else
-		{
-			AddMessage(FMessage::ESeverity::Error, FText::FromString(MeshError));
+			AddMessage(FMessage::ESeverity::Info, Line);
 		}
 	}
 	return FReply::Handled();
@@ -529,12 +530,6 @@ void SDTHImportWizard::AddMessage(FMessage::ESeverity Severity, const FText& Tex
 	{
 		MessageList->RequestListRefresh();
 		MessageList->RequestScrollIntoView(Message);
-	}
-	switch (Severity)
-	{
-	case FMessage::ESeverity::Error: UE_LOG(LogDTHImport, Error, TEXT("%s"), *Text.ToString()); break;
-	case FMessage::ESeverity::Warning: UE_LOG(LogDTHImport, Warning, TEXT("%s"), *Text.ToString()); break;
-	default: UE_LOG(LogDTHImport, Log, TEXT("%s"), *Text.ToString()); break;
 	}
 }
 
