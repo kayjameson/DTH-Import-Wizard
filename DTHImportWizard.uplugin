@@ -27,6 +27,14 @@
 		{
 			"Name": "Interchange",
 			"Enabled": true
+		},
+		{
+			"Name": "ControlRig",
+			"Enabled": true
+		},
+		{
+			"Name": "ControlRigModules",
+			"Enabled": true
 		}
 	]
 }

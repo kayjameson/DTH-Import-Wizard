@@ -30,8 +30,9 @@ namespace DTHImport
 	void ApplyRetargeting(const FDTHExport& Export, USkeleton* Skeleton, FDTHImportReport& Report);
 
 	/**
-	 * On the UE5 Mannequin or a DTH archetype skeleton, DTH's existing pose assets are used and none are built.
-	 * On any other skeleton, one additive pose asset per exported category is built from the export.
+	 * One additive pose asset per exported category, except that on the UE5 Mannequin or a DTH archetype skeleton
+	 * the core FAC/JCM/RET categories come from DTH's existing pose assets. Add-ons built on those skeletons get a
+	 * manual step for adding them to the post-process blueprint.
 	 */
 	void BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, const FString& DestinationFolder, FDTHImportReport& Report);
 

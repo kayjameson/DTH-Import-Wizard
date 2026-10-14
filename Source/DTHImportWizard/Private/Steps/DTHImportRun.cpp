@@ -9,6 +9,8 @@
 #include "Misc/Paths.h"
 #include "Misc/ScopedSlowTask.h"
 #include "Steps/DTHCharacterSetup.h"
+#include "Steps/DTHControlRig.h"
+#include "ControlRigBlueprintLegacy.h"
 #include "Steps/DTHMeshImport.h"
 #include "Steps/DTHSkeleton.h"
 #include "UObject/UObjectIterator.h"
@@ -56,10 +58,11 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 	}
 
 	// Steps: one per mesh, then blueprint, setup, retargeting, pose assets, save.
-	FScopedSlowTask Task(Request.MeshIndices.Num() + 5, LOCTEXT("Task", "Importing DazToHue character"));
+	FScopedSlowTask Task(Request.MeshIndices.Num() + 6, LOCTEXT("Task", "Importing DazToHue character"));
 	Task.MakeDialog(true);
 
 	TArray<USkeletalMesh*> Meshes;
+	USkeletalMesh* Body = nullptr;
 	for (const int32 MeshIndex : Request.MeshIndices)
 	{
 		if (Task.ShouldCancel())
@@ -77,6 +80,7 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 			{
 				Report.Info(FText::Format(LOCTEXT("MeshReused", "{0} exists; reused (tick Reimport to replace it)."), FText::FromString(AssetPath)));
 				Meshes.Add(Existing);
+				Body = Entry.IsBody() ? Existing : Body;
 				continue;
 			}
 		}
@@ -86,6 +90,7 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 			Report.Info(FText::Format(LOCTEXT("MeshImported", "Imported {0}: {1} material slots, {2} morph targets."),
 				FText::FromString(Mesh->GetPathName()), Mesh->GetMaterials().Num(), Mesh->GetMorphTargets().Num()));
 			Meshes.Add(Mesh);
+			Body = Entry.IsBody() ? Mesh : Body;
 		}
 		else
 		{
@@ -109,6 +114,17 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 	Task.EnterProgressFrame(1.f, LOCTEXT("TaskPoses", "Pose assets"));
 	BuildPoseAssets(Export, Skeleton, Request.DestinationFolder, Report);
 
+	Task.EnterProgressFrame(1.f, LOCTEXT("TaskRig", "Control rig"));
+	UControlRigBlueprint* Rig = nullptr;
+	if (Body)
+	{
+		Rig = BuildControlRig(Export, Body, Request.DestinationFolder, Report);
+	}
+	else
+	{
+		Report.Warning(LOCTEXT("NoBody", "No body mesh among the imported meshes; control rig skipped."));
+	}
+
 	Task.EnterProgressFrame(1.f, LOCTEXT("TaskSave", "Saving"));
 	TArray<UPackage*> Packages;
 	Packages.Add(Skeleton->GetPackage());
@@ -119,6 +135,10 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 	for (USkeletalMesh* Mesh : Meshes)
 	{
 		Packages.Add(Mesh->GetPackage());
+	}
+	if (Rig)
+	{
+		Packages.Add(Rig->GetPackage());
 	}
 	// Plus anything new under the destination (pose assets, Interchange's import data). Nothing else the user has open.
 	const FString Prefix = Request.DestinationFolder / TEXT("");

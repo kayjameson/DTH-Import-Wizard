@@ -61,6 +61,12 @@ namespace
 		return bDQS ? TEXT("Native/Genesis_9/ABP_DTH_DQS_Genesis9") : TEXT("Native/Genesis_9/ABP_DTH_Genesis9");
 	}
 
+	bool IsCoreCategory(const FString& Category)
+	{
+		return Category.Equals(TEXT("FAC"), ESearchCase::IgnoreCase) || Category.Equals(TEXT("JCM"), ESearchCase::IgnoreCase)
+			|| Category.Equals(TEXT("RET"), ESearchCase::IgnoreCase);
+	}
+
 	bool IsStandardSkeleton(const USkeleton* Skeleton)
 	{
 		const UDTHImportSettings* Settings = GetDefault<UDTHImportSettings>();
@@ -290,22 +296,34 @@ void DTHImport::BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, c
 	{
 		return;
 	}
-	if (IsStandardSkeleton(Skeleton))
+	// FAC, JCM and RET are DTH's core categories: on the UE5 Mannequin and DTH archetype skeletons DTH's own pose
+	// assets (already used by its post-process blueprint) serve them. Add-on categories such as GEN (Golden Palace 9
+	// guide) and FBM (Custom ROM guide) have no stock asset and are always built, then added to the blueprint by hand.
+	const bool bStandard = IsStandardSkeleton(Skeleton);
+	TArray<FString> Skipped;
+	TArray<const FDTHPoseAssetEntry*> ToBuild;
+	for (const FDTHPoseAssetEntry& Entry : Export.PoseAssets)
 	{
-		TArray<FString> Categories;
-		for (const FDTHPoseAssetEntry& Entry : Export.PoseAssets)
+		if (bStandard && IsCoreCategory(Entry.Category))
 		{
-			Categories.Add(Entry.Category);
+			Skipped.Add(Entry.Category);
 		}
-		Report.Info(FText::Format(LOCTEXT("PoseStandard", "Pose assets: {0} is a DTH-supported skeleton, so DTH's own pose assets are used; the export's {1} pose animations are not built."),
-			FText::FromString(Skeleton->GetName()), FText::FromString(FString::Join(Categories, TEXT(", ")))));
-		return;
+		else
+		{
+			ToBuild.Add(&Entry);
+		}
+	}
+	if (Skipped.Num() > 0)
+	{
+		Report.Info(FText::Format(LOCTEXT("PoseStandard", "Pose assets: on {0}, DTH's own {1} pose assets are used (not built from the export)."),
+			FText::FromString(Skeleton->GetName()), FText::FromString(FString::Join(Skipped, TEXT(", ")))));
 	}
 
 	const FString Folder = JoinPath(DestinationFolder, TEXT("PoseAssets"));
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	for (const FDTHPoseAssetEntry& Entry : Export.PoseAssets)
+	for (const FDTHPoseAssetEntry* EntryPtr : ToBuild)
 	{
+		const FDTHPoseAssetEntry& Entry = *EntryPtr;
 		FString Error;
 		UAnimSequence* Animation = ImportPoseAnimation(Entry.AnimationFile, Folder, Skeleton, Error);
 		if (!Animation)
@@ -344,6 +362,15 @@ void DTHImport::BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, c
 		ObjectTools::ForceDeleteObjects({ Animation }, false);
 		Report.Info(FText::Format(LOCTEXT("PoseBuilt", "Built {0}: {1} poses, additive on {2}."),
 			FText::FromString(Name), PoseAsset->GetNumPoses(), FText::FromString(PoseNames.Num() > 0 ? PoseNames[0] : FString(TEXT("pose 0")))));
+		if (bStandard)
+		{
+			// Golden Palace 9 guide steps 124-125: the post-process blueprint only evaluates the pose assets wired into it.
+			FDTHManualStep& Step = Report.ManualSteps.AddDefaulted_GetRef();
+			Step.Title = FText::Format(LOCTEXT("PoseManualTitle", "Add {0} to the post-process blueprint"), FText::FromString(Name));
+			Step.Instructions.Add(FText::Format(LOCTEXT("PoseManual1", "Open ABP_{0}_PostProcess in {1}."), FText::FromString(AssetSafe(Export.Character)), FText::FromString(DestinationFolder)));
+			Step.Instructions.Add(FText::Format(LOCTEXT("PoseManual2", "Drag {0} (in {1}) into the AnimGraph and connect it just before Output Pose."), FText::FromString(Name), FText::FromString(Folder)));
+			Step.Instructions.Add(LOCTEXT("PoseManual3", "Compile and save."));
+		}
 	}
 }
 
