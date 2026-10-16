@@ -18,6 +18,14 @@ public:
 	static TArray<FString> DescribeExport(const FString& ExportFolder);
 
 	/**
+	 * The material merge check on its own: every manifest slot traced back to the Daz surfaces it was made from, and
+	 * each slot that merges surfaces with different textures (unbaked) reported. DazExportFbx empty: found from the
+	 * Character Studio project layout. Problems start with "WARNING:".
+	 */
+	UFUNCTION(BlueprintCallable, Category = "DTH Import Wizard")
+	static TArray<FString> CheckMaterialMerges(const FString& ExportFolder, const FString& DazExportFbx = TEXT(""));
+
+	/**
 	 * Runs the whole import as the wizard's Import button does: the export's manifest meshes (plus unlisted FBX
 	 * files if bIncludeUnlisted), post-process blueprint, deformer, curves, retargeting and pose assets, into
 	 * DestinationFolder (e.g. /Game/Characters/Vi). Existing meshes are reused unless bReimportExistingMeshes.

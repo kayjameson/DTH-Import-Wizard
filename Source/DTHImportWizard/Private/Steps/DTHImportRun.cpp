@@ -10,7 +10,9 @@
 #include "Misc/ScopedSlowTask.h"
 #include "Steps/DTHCharacterSetup.h"
 #include "Steps/DTHControlRig.h"
+#include "Materials/MaterialInstanceConstant.h"
 #include "Steps/DTHMaterials.h"
+#include "Steps/DTHMergeCheck.h"
 #include "ControlRigBlueprintLegacy.h"
 #include "Steps/DTHMeshImport.h"
 #include "Steps/DTHSkeleton.h"
@@ -35,6 +37,25 @@ void FDTHImportReport::Error(const FText& Text)
 	Messages.Add({ FDTHImportMessage::ESeverity::Error, Text });
 	bSucceeded = false;
 	UE_LOG(LogDTHImport, Error, TEXT("%s"), *Text.ToString());
+}
+
+void DTHImport::ReportMaterialMerges(const FDTHMergeCheck& Check, FDTHImportReport& Report)
+{
+	if (!Check.Skipped.IsEmpty())
+	{
+		Report.Warning(FText::FromString(Check.Skipped));
+		return;
+	}
+	for (const FString& Mesh : Check.Unmatched)
+	{
+		Report.Warning(FText::Format(LOCTEXT("MergeUnmatched", "Material merge check: {0} could not be traced back to Daz's export, so its slots were not checked."), FText::FromString(Mesh)));
+	}
+	for (const FDTHMergeProblem& Problem : Check.Problems)
+	{
+		Report.Warning(FText::FromString(Problem.Describe()));
+	}
+	Report.Info(FText::Format(LOCTEXT("MergeChecked", "Material merge check against {0}: {1} slots checked, {2} baked (skipped), {3} with mismatched textures."),
+		FText::FromString(FPaths::GetCleanFilename(Check.DazFbx)), Check.SlotsChecked, Check.SlotsBaked, Check.Problems.Num()));
 }
 
 FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
@@ -62,15 +83,18 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 	FScopedSlowTask Task(Request.MeshIndices.Num() + 7, LOCTEXT("Task", "Importing DazToHue character"));
 	Task.MakeDialog(true);
 
-	// Before the meshes, so their slots find the materials by name (DTH importer: process_fbx_materials ahead of each FBX).
+	// Before the meshes, so their slots find the materials by name (DTH importer: process_fbx_materials ahead of each
+	// FBX); assigned explicitly again after them, so reused meshes get them too.
 	Task.EnterProgressFrame(1.f, LOCTEXT("TaskMaterials", "Materials and textures"));
+	TMap<FString, UMaterialInstanceConstant*> Materials;
 	{
 		TArray<const FDTHMeshEntry*> MaterialMeshes;
 		for (const int32 MeshIndex : Request.MeshIndices)
 		{
 			MaterialMeshes.Add(&Export.Meshes[MeshIndex]);
 		}
-		BuildMaterials(Export, MaterialMeshes, Request.DestinationFolder, Report);
+		ReportMaterialMerges(CheckMaterialMerges(Export, MaterialMeshes), Report);
+		Materials = BuildMaterials(Export, BuildMaterialPlan(Export, MaterialMeshes), Request.DestinationFolder, Report);
 	}
 
 	TArray<USkeletalMesh*> Meshes;
@@ -109,6 +133,8 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 			return Report;
 		}
 	}
+
+	AssignMaterials(Meshes, Materials, Report);
 
 	Task.EnterProgressFrame(1.f, LOCTEXT("TaskAbp", "Post-process blueprint"));
 	UAnimBlueprint* PostProcess = PreparePostProcessBlueprint(Export, Skeleton, Request.DestinationFolder, Report);

@@ -18,8 +18,13 @@ struct FDTHImportRequest
 	FString SkeletonOverride;
 };
 
+struct FDTHMergeCheck;
+
 namespace DTHImport
 {
 	/** Runs every step in order and saves what it created or changed. */
 	FDTHImportReport RunImport(const FDTHImportRequest& Request);
+
+	/** The material merge check's findings as report lines (warnings for problems, one summary line). */
+	void ReportMaterialMerges(const FDTHMergeCheck& Check, FDTHImportReport& Report);
 }

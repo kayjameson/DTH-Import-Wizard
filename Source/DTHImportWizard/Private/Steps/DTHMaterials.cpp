@@ -1,27 +1,23 @@
 #include "Steps/DTHMaterials.h"
 
+#include "AssetImportTask.h"
 #include "AssetToolsModule.h"
 #include "DTHImportLog.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/Texture2D.h"
 #include "Export/DTHExport.h"
 #include "Factories/MaterialInstanceConstantFactoryNew.h"
-#include "InterchangeGenericTexturePipeline.h"
-#include "InterchangeManager.h"
-#include "InterchangeSourceData.h"
 #include "MaterialEditingLibrary.h"
 #include "Materials/MaterialInstanceConstant.h"
+#include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Settings/DTHImportSettings.h"
 #include "Steps/DTHImportReport.h"
-#include "UObject/StrongObjectPtr.h"
 
 #define LOCTEXT_NAMESPACE "DTHMaterials"
 
 namespace
 {
-	/** How a texture is imported, by the DTH importer's three texture pipelines. */
-	enum class ETextureKind : uint8 { Colour, Normal, Mask };
-
 	FString AssetSafe(const FString& Name)
 	{
 		FString Out;
@@ -32,31 +28,51 @@ namespace
 		return Out;
 	}
 
-	/** DTH's master instance for a material type, relative to the DazToHue content folder, and the suffix of its per-character copy. */
-	bool MasterFor(const FString& Type, FString& OutMaster, FString& OutCopySuffix, bool& bOutSlotMaterial)
+	/** The slot material IS the per-character copy for these families, as the DTH importer does. */
+	bool SlotIsCopy(const FString& Parent)
 	{
-		struct FMaster { const TCHAR* Type; const TCHAR* Path; const TCHAR* Suffix; bool bSlotMaterial; };
-		static const FMaster Masters[] = {
-			{ TEXT("Skin"), TEXT("Common/Materials/Skin/MI_DTH_Skin"), TEXT("SkinMaster"), true },
-			{ TEXT("Cloth"), TEXT("Common/Materials/Cloth/MI_DTH_Cloth"), TEXT("ClothMaster"), true },
-			{ TEXT("Metal"), TEXT("Common/Materials/Metal/MI_DTH_Metal"), TEXT("MetalMaster"), true },
-			{ TEXT("Plastic"), TEXT("Common/Materials/Plastic/MI_DTH_Plastic"), TEXT("PlasticMaster"), true },
-			{ TEXT("Glass"), TEXT("Common/Materials/Glass/MI_DTH_Glass"), TEXT("GlassMaster"), true },
-			{ TEXT("Eye"), TEXT("Common/Materials/Eyes/MI_DTH_Eye"), TEXT("Eyes"), false },
-			{ TEXT("EyeOcclusion"), TEXT("Common/Materials/Eyes/MI_DTH_EyeOcclusion"), TEXT("EyeOcclusion"), false },
-			{ TEXT("Tear"), TEXT("Common/Materials/Eyes/MI_DTH_LacrimalFluid"), TEXT("Tear"), false },
-		};
-		for (const FMaster& Master : Masters)
+		return Parent == TEXT("Eye") || Parent == TEXT("EyeOcclusion") || Parent == TEXT("Tear");
+	}
+
+	/** Import settings per kind (the old wizard's, which gave correct results). */
+	void ApplyKind(UTexture2D* Texture, EDTHTextureKind Kind, bool bFlipGreen)
+	{
+		Texture->Modify();
+		switch (Kind)
 		{
-			if (Type == Master.Type)
-			{
-				OutMaster = Master.Path;
-				OutCopySuffix = Master.Suffix;
-				bOutSlotMaterial = Master.bSlotMaterial;
-				return true;
-			}
+		case EDTHTextureKind::Color:
+			Texture->SRGB = true;
+			Texture->CompressionSettings = TC_Default;
+			break;
+		case EDTHTextureKind::Normal:
+			Texture->SRGB = false;
+			Texture->CompressionSettings = TC_Normalmap;
+			Texture->LODGroup = TEXTUREGROUP_WorldNormalMap;
+			break;
+		case EDTHTextureKind::Grayscale:
+			Texture->SRGB = false;
+			Texture->CompressionSettings = TC_Grayscale;
+			break;
+		case EDTHTextureKind::Linear:
+			Texture->SRGB = false;
+			Texture->CompressionSettings = TC_Default;
+			break;
 		}
-		return false;
+		Texture->bFlipGreenChannel = bFlipGreen && Kind == EDTHTextureKind::Normal;
+		Texture->PostEditChange();
+		Texture->MarkPackageDirty();
+	}
+
+	/** "Use Base Colour Texture" for "Base Colour Texture", "Use Normal Texture" for "Normal Texture"... */
+	FName SwitchFor(const FString& Parameter, const TArray<FName>& Switches)
+	{
+		FString Without = Parameter;
+		Without.RemoveFromStart(TEXT("Base "));
+		for (const FString& Candidate : { TEXT("Use ") + Parameter, TEXT("Use ") + Without })
+		{
+			if (Switches.Contains(FName(*Candidate))) return FName(*Candidate);
+		}
+		return NAME_None;
 	}
 
 	class FMaterialBuilder
@@ -71,206 +87,148 @@ namespace
 		{
 		}
 
-		void Build(const FDTHMaterialSlot& Slot)
+		UMaterialInstanceConstant* Build(const FDTHMaterialPlan& Plan)
 		{
-			const FString SlotName = AssetSafe(Slot.Slot);
-			if (SlotName.IsEmpty() || Exists(MaterialFolder / SlotName))
+			if (Plan.Parent == TEXT("Skip")) return nullptr;
+			const FString SlotName = AssetSafe(Plan.Slot);
+			const FString StockPath = DTHImport::ParentMaterialPath(Plan.Parent);
+			if (StockPath.IsEmpty())
 			{
-				return;
+				Report.Warning(FText::Format(LOCTEXT("UnknownParent", "{0}: no DTH material for \"{1}\"; the slot is left as it is."),
+					FText::FromString(Plan.Slot), FText::FromString(Plan.Parent)));
+				return nullptr;
+			}
+			for (const FDTHTextureRow& Row : Plan.Textures)
+			{
+				if (Row.bProblem)
+				{
+					Report.Warning(FText::Format(LOCTEXT("TextureProblem", "{0}: {1} - {2}"), FText::FromString(Plan.Slot), FText::FromString(Row.Parameter), FText::FromString(Row.Why)));
+				}
 			}
 
-			FString MasterPath, CopySuffix;
-			bool bSlotMaterial = false;
-			if (!MasterFor(Slot.Type, MasterPath, CopySuffix, bSlotMaterial))
+			if (SlotIsCopy(Plan.Parent))
 			{
-				Report.Warning(FText::Format(LOCTEXT("UnknownType", "Material slot {0}: type \"{1}\" has no DTH material; the slot is left without one."),
-					FText::FromString(Slot.Slot), FText::FromString(Slot.Type)));
-				return;
-			}
-			UMaterialInstanceConstant* Master = PerCharacterMaster(MasterPath, CopySuffix);
-			if (!Master || !bSlotMaterial)
-			{
-				// Eye, eye occlusion and tear slots use the per-character copy itself, which carries the slot's name.
-				return;
+				return CopyOf(StockPath, SlotName);
 			}
 
-			// The texture channels the importer reads, in its order. Metallic is imported but never set on the material, as there.
-			UTexture2D* Colour = ImportTexture(Slot, TEXT("colour"), ETextureKind::Colour);
-			UTexture2D* Normal = ImportTexture(Slot, TEXT("normal"), ETextureKind::Normal);
-			UTexture2D* Specular = ImportTexture(Slot, TEXT("specular"), ETextureKind::Mask);
-			UTexture2D* Roughness = ImportTexture(Slot, TEXT("roughness"), ETextureKind::Mask);
-			ImportTexture(Slot, TEXT("metallic"), ETextureKind::Mask);
-			UTexture2D* Opacity = ImportTexture(Slot, TEXT("opacity"), ETextureKind::Mask);
+			UMaterialInstanceConstant* Master = CopyOf(StockPath, FString::Printf(TEXT("MI_%s%sMaster"), *AssetSafe(Export.Character), *Plan.Parent));
+			if (!Master) return nullptr;
 
-			UMaterialInstanceConstantFactoryNew* Factory = NewObject<UMaterialInstanceConstantFactoryNew>();
-			Factory->InitialParent = Master;
-			UMaterialInstanceConstant* Instance = Cast<UMaterialInstanceConstant>(
-				AssetTools.CreateAsset(SlotName, MaterialFolder, UMaterialInstanceConstant::StaticClass(), Factory));
+			const FString Path = MaterialFolder / SlotName;
+			UMaterialInstanceConstant* Instance = LoadObject<UMaterialInstanceConstant>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
 			if (!Instance)
 			{
-				Report.Error(FText::Format(LOCTEXT("InstanceFailed", "Could not create material {0}."), FText::FromString(MaterialFolder / SlotName)));
-				return;
+				UMaterialInstanceConstantFactoryNew* Factory = NewObject<UMaterialInstanceConstantFactoryNew>();
+				Factory->InitialParent = Master;
+				Instance = Cast<UMaterialInstanceConstant>(AssetTools.CreateAsset(SlotName, MaterialFolder, UMaterialInstanceConstant::StaticClass(), Factory));
+				if (!Instance)
+				{
+					Report.Error(FText::Format(LOCTEXT("InstanceFailed", "Could not create material {0}."), FText::FromString(Path)));
+					return nullptr;
+				}
+			}
+			else if (Instance->Parent != Master)
+			{
+				UMaterialEditingLibrary::SetMaterialInstanceParent(Instance, Master);
 			}
 
-			// The parameters the importer sets; a material without one of them is left as it is.
-			SetTexture(Instance, TEXT("Use Base Colour Texture"), TEXT("Base Colour Texture"), Colour);
-			SetTexture(Instance, nullptr, TEXT("Base Normal Texture"), Normal);
-			SetTexture(Instance, TEXT("Use Base Specular Texture"), TEXT("Base Specular Texture"), Specular);
-			SetTexture(Instance, TEXT("Use Base Roughness Texture"), TEXT("Base Roughness Texture"), Roughness);
-			SetTexture(Instance, TEXT("Use Base Opacity Texture"), TEXT("Base Opacity Texture"), Opacity);
+			TArray<FName> Parameters, Switches;
+			UMaterialEditingLibrary::GetTextureParameterNames(Master, Parameters);
+			UMaterialEditingLibrary::GetStaticSwitchParameterNames(Master, Switches);
+			int32 Set = 0;
+			for (const FDTHTextureRow& Row : Plan.Textures)
+			{
+				UTexture2D* Texture = Row.Source.IsEmpty() ? nullptr : TextureFor(Row);
+				if (!Texture) continue;
+				if (!Parameters.Contains(FName(*Row.Parameter)))
+				{
+					Report.Warning(FText::Format(LOCTEXT("NoParameter", "{0}: {1} has no parameter \"{2}\"."),
+						FText::FromString(Plan.Slot), FText::FromString(Master->GetName()), FText::FromString(Row.Parameter)));
+					continue;
+				}
+				UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(Instance, FName(*Row.Parameter), Texture);
+				const FName Switch = SwitchFor(Row.Parameter, Switches);
+				if (!Switch.IsNone())
+				{
+					UMaterialEditingLibrary::SetMaterialInstanceStaticSwitchParameterValue(Instance, Switch, true, EMaterialParameterAssociation::GlobalParameter, false);
+				}
+				++Set;
+			}
 			UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 			Instance->MarkPackageDirty();
 			++Built;
+			UE_LOG(LogDTHImport, Log, TEXT("%s: parent %s, %d textures."), *SlotName, *Master->GetName(), Set);
+			return Instance;
 		}
 
-		void Finish()
+		void Finish() const
 		{
-			int32 MasterCount = 0, TextureCount = 0;
-			for (const TPair<FString, UMaterialInstanceConstant*>& Pair : Masters)
-			{
-				MasterCount += Pair.Value ? 1 : 0;
-			}
-			for (const TPair<FString, UTexture2D*>& Pair : TextureAssets)
-			{
-				TextureCount += Pair.Value ? 1 : 0;
-			}
-			Report.Info(FText::Format(LOCTEXT("Built", "Materials: {0} slot materials and {1} DTH master copies in {2}, {3} textures in {4}."),
-				Built, MasterCount, FText::FromString(MaterialFolder), TextureCount, FText::FromString(TextureFolder)));
+			Report.Info(FText::Format(LOCTEXT("Built", "Materials: {0} slot materials in {1}; {2} textures imported, {3} reused, in {4}."),
+				Built, FText::FromString(MaterialFolder), Imported, Reused, FText::FromString(TextureFolder)));
 		}
 
 	private:
-		static bool Exists(const FString& PackagePath)
+		/** MI_<...> in the material folder: a copy of DTH's instance at StockPath, made once per character. */
+		UMaterialInstanceConstant* CopyOf(const FString& StockPath, const FString& CopyName)
 		{
-			return FPackageName::DoesPackageExist(PackagePath) || FindPackage(nullptr, *PackagePath);
-		}
-
-		/** MI_<Character><Suffix>: one copy of a DTH master instance per character, made the first time a slot needs it. */
-		UMaterialInstanceConstant* PerCharacterMaster(const FString& MasterPath, const FString& CopySuffix)
-		{
-			if (UMaterialInstanceConstant** Found = Masters.Find(CopySuffix))
-			{
-				return *Found;
-			}
-			const FString CopyName = FString::Printf(TEXT("MI_%s%s"), *AssetSafe(Export.Character), *CopySuffix);
-			const FString CopyPath = MaterialFolder / CopyName;
-			UMaterialInstanceConstant* Copy = LoadObject<UMaterialInstanceConstant>(nullptr, *CopyPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+			if (UMaterialInstanceConstant** Found = Copies.Find(CopyName)) return *Found;
+			UMaterialInstanceConstant* Copy = LoadObject<UMaterialInstanceConstant>(nullptr, *(MaterialFolder / CopyName), nullptr, LOAD_NoWarn | LOAD_Quiet);
 			if (!Copy)
 			{
-				const FString StockPath = GetDefault<UDTHImportSettings>()->DazToHueAsset(MasterPath);
-				UMaterialInstanceConstant* Stock = LoadObject<UMaterialInstanceConstant>(nullptr, *StockPath, nullptr, LOAD_NoWarn);
-				if (!Stock)
-				{
-					Report.Error(FText::Format(LOCTEXT("MasterMissing", "DTH material not found: {0}"), FText::FromString(StockPath)));
-					Masters.Add(CopySuffix, nullptr);
-					return nullptr;
-				}
-				Copy = Cast<UMaterialInstanceConstant>(AssetTools.DuplicateAsset(CopyName, MaterialFolder, Stock));
+				const FString FullStock = GetDefault<UDTHImportSettings>()->DazToHueAsset(StockPath);
+				UMaterialInstanceConstant* Stock = LoadObject<UMaterialInstanceConstant>(nullptr, *FullStock, nullptr, LOAD_NoWarn);
+				Copy = Stock ? Cast<UMaterialInstanceConstant>(AssetTools.DuplicateAsset(CopyName, MaterialFolder, Stock)) : nullptr;
 				if (!Copy)
 				{
-					Report.Error(FText::Format(LOCTEXT("MasterCopyFailed", "Could not copy {0} to {1}."), FText::FromString(StockPath), FText::FromString(CopyPath)));
+					Report.Error(FText::Format(LOCTEXT("CopyFailed", "Could not copy DTH material {0} to {1}."), FText::FromString(FullStock), FText::FromString(CopyName)));
 				}
 			}
-			Masters.Add(CopySuffix, Copy);
+			Copies.Add(CopyName, Copy);
 			return Copy;
 		}
 
-		UTexture2D* ImportTexture(const FDTHMaterialSlot& Slot, const TCHAR* Channel, ETextureKind Kind)
+		/** The plan's texture: the existing asset (settings re-applied), else imported under the plan's name. */
+		UTexture2D* TextureFor(const FDTHTextureRow& Row)
 		{
-			const FString* File = Slot.Textures.Find(Channel);
-			if (!File || File->IsEmpty())
+			if (UTexture2D** Done = Textures.Find(Row.AssetName)) return *Done;
+			const FString Path = TextureFolder / Row.AssetName;
+			UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
+			if (Texture)
 			{
-				return nullptr;
+				++Reused;
 			}
-			const FString Source = FPaths::ConvertRelativePathToFull(*File);
-			const FString Key = FString::Printf(TEXT("%d|%s"), static_cast<int32>(Kind), *Source.ToLower());
-			if (UTexture2D** Imported = TextureAssets.Find(Key))
+			else if (!FPaths::FileExists(Row.Source))
 			{
-				return *Imported;
+				Report.Warning(FText::Format(LOCTEXT("TextureMissing", "Texture file missing, skipped: {0}"), FText::FromString(Row.Source)));
 			}
-			if (!FPaths::FileExists(Source))
+			else
 			{
-				Report.Warning(FText::Format(LOCTEXT("TextureMissing", "Material slot {0}: {1} texture not found: {2}"),
-					FText::FromString(Slot.Slot), FText::FromString(Channel), FText::FromString(Source)));
-				TextureAssets.Add(Key, nullptr);
-				return nullptr;
-			}
-
-			// Named after the file, as Interchange names it. Different files with the same name (outfit textures often share
-			// names across folders) each keep their own asset rather than overwriting one another.
-			const FString BaseName = AssetSafe(FPaths::GetBaseFilename(Source));
-			FString AssetName = BaseName;
-			for (int32 Suffix = 2; UsedTextureNames.Contains(AssetName); ++Suffix)
-			{
-				AssetName = FString::Printf(TEXT("%s_%d"), *BaseName, Suffix);
-			}
-			UsedTextureNames.Add(AssetName);
-
-			TStrongObjectPtr<UInterchangeGenericTexturePipeline> Pipeline(NewObject<UInterchangeGenericTexturePipeline>(
-				GetTransientPackage(), MakeUniqueObjectName(GetTransientPackage(), UInterchangeGenericTexturePipeline::StaticClass(), TEXT("DTHTexturePipeline")),
-				RF_Transient));
-			// The DTH importer's colour and mask pipelines turn normal-map detection off; its normal pipeline flips the green channel.
-			Pipeline->AssetName = AssetName;
-			Pipeline->bDetectNormalMapTexture = Kind == ETextureKind::Normal;
-			Pipeline->bFlipNormalMapGreenChannel = Kind == ETextureKind::Normal;
-
-			FImportAssetParameters Parameters;
-			Parameters.bIsAutomated = true;
-			Parameters.bReplaceExisting = true;
-			Parameters.OverridePipelines.Add(FSoftObjectPath(Pipeline.Get()));
-
-			TArray<UObject*> Imported;
-			UInterchangeManager::GetInterchangeManager().ImportAsset(TextureFolder, UInterchangeManager::CreateSourceData(Source), Parameters, Imported);
-			UTexture2D* Texture = nullptr;
-			for (UObject* Object : Imported)
-			{
-				if ((Texture = Cast<UTexture2D>(Object)) != nullptr)
+				// An import task with an explicit destination name: Interchange's texture pipeline names the asset after
+				// the file, so same-named files from different folders overwrote one another.
+				UAssetImportTask* Task = NewObject<UAssetImportTask>();
+				Task->Filename = Row.Source;
+				Task->DestinationPath = TextureFolder;
+				Task->DestinationName = Row.AssetName;
+				Task->bReplaceExisting = true;
+				Task->bAutomated = true;
+				Task->bSave = false;
+				AssetTools.ImportAssetTasks({ Task });
+				Texture = LoadObject<UTexture2D>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
+				if (Texture)
 				{
-					break;
+					++Imported;
+				}
+				else
+				{
+					Report.Warning(FText::Format(LOCTEXT("TextureFailed", "{0} did not import as a texture."), FText::FromString(Row.Source)));
 				}
 			}
-			if (!Texture)
+			if (Texture)
 			{
-				Report.Warning(FText::Format(LOCTEXT("TextureFailed", "Material slot {0}: {1} did not import as a texture."),
-					FText::FromString(Slot.Slot), FText::FromString(Source)));
-				TextureAssets.Add(Key, nullptr);
-				return nullptr;
+				ApplyKind(Texture, Row.Kind, Row.bFlipGreen);
 			}
-
-			// The settings the importer gives each kind after import.
-			Texture->Modify();
-			switch (Kind)
-			{
-			case ETextureKind::Colour:
-				Texture->LODGroup = TEXTUREGROUP_Character;
-				break;
-			case ETextureKind::Normal:
-				Texture->CompressionSettings = TC_Normalmap;
-				Texture->SRGB = false;
-				Texture->LODGroup = TEXTUREGROUP_CharacterNormalMap;
-				break;
-			case ETextureKind::Mask:
-				Texture->LODGroup = TEXTUREGROUP_Character;
-				Texture->SRGB = false;
-				Texture->CompressionSettings = TC_Grayscale;
-				break;
-			}
-			Texture->PostEditChange();
-			Texture->MarkPackageDirty();
-			TextureAssets.Add(Key, Texture);
+			Textures.Add(Row.AssetName, Texture);
 			return Texture;
-		}
-
-		static void SetTexture(UMaterialInstanceConstant* Instance, const TCHAR* Switch, const TCHAR* Parameter, UTexture2D* Texture)
-		{
-			if (!Texture)
-			{
-				return;
-			}
-			if (Switch)
-			{
-				UMaterialEditingLibrary::SetMaterialInstanceStaticSwitchParameterValue(Instance, Switch, true, EMaterialParameterAssociation::GlobalParameter, false);
-			}
-			UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(Instance, Parameter, Texture);
 		}
 
 		const FDTHExport& Export;
@@ -278,27 +236,63 @@ namespace
 		const FString TextureFolder;
 		FDTHImportReport& Report;
 		IAssetTools& AssetTools;
-
-		TMap<FString, UMaterialInstanceConstant*> Masters;
-		TMap<FString, UTexture2D*> TextureAssets;
-		TSet<FString> UsedTextureNames;
-		int32 Built = 0;
+		TMap<FString, UMaterialInstanceConstant*> Copies;
+		TMap<FString, UTexture2D*> Textures;
+		int32 Built = 0, Imported = 0, Reused = 0;
 	};
 }
 
-void DTHImport::BuildMaterials(const FDTHExport& Export, const TArray<const FDTHMeshEntry*>& Meshes, const FString& DestinationFolder, FDTHImportReport& Report)
+TMap<FString, UMaterialInstanceConstant*> DTHImport::BuildMaterials(const FDTHExport& Export, const TArray<FDTHMaterialPlan>& Plans,
+	const FString& DestinationFolder, FDTHImportReport& Report)
 {
 	FString Folder = DestinationFolder;
 	Folder.RemoveFromEnd(TEXT("/"));
 	FMaterialBuilder Builder(Export, Folder, Report);
-	for (const FDTHMeshEntry* Mesh : Meshes)
+	TMap<FString, UMaterialInstanceConstant*> Made;
+	for (const FDTHMaterialPlan& Plan : Plans)
 	{
-		for (const FDTHMaterialSlot& Slot : Mesh->Materials)
+		if (UMaterialInstanceConstant* Instance = Builder.Build(Plan))
 		{
-			Builder.Build(Slot);
+			Made.Add(Plan.Slot, Instance);
 		}
 	}
 	Builder.Finish();
+	return Made;
+}
+
+void DTHImport::AssignMaterials(const TArray<USkeletalMesh*>& Meshes, const TMap<FString, UMaterialInstanceConstant*>& Materials, FDTHImportReport& Report)
+{
+	for (USkeletalMesh* Mesh : Meshes)
+	{
+		TArray<FSkeletalMaterial> Slots = Mesh->GetMaterials();
+		int32 Changed = 0, Missing = 0;
+		for (FSkeletalMaterial& Slot : Slots)
+		{
+			UMaterialInstanceConstant* const* Material = Materials.Find(Slot.MaterialSlotName.ToString());
+			if (!Material)
+			{
+				++Missing;
+				continue;
+			}
+			if (Slot.MaterialInterface != *Material)
+			{
+				Slot.MaterialInterface = *Material;
+				++Changed;
+			}
+		}
+		if (Changed > 0)
+		{
+			Mesh->Modify();
+			Mesh->SetMaterials(Slots);
+			Mesh->PostEditChange();
+			Mesh->MarkPackageDirty();
+		}
+		if (Missing > 0)
+		{
+			Report.Warning(FText::Format(LOCTEXT("SlotsWithout", "{0}: {1} of {2} material slots have no material from the export."),
+				FText::FromString(Mesh->GetName()), Missing, Slots.Num()));
+		}
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

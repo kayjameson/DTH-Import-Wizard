@@ -57,6 +57,7 @@ private:
 	void LoadExport(const FString& Folder);
 	FReply OnImport();
 	bool CanImport() const;
+	FReply OnCheckMerges();
 	void AddMessage(FMessage::ESeverity Severity, const FText& Text);
 
 	FText GetExportFolderText() const;
@@ -73,6 +74,9 @@ private:
 	FString DestinationFolder;
 	FString SkeletonPath;
 	bool bReimportExistingMeshes = false;
+
+	/** The last material merge check, as shown on the Meshes page (empty until run). */
+	FText MergeCheckText;
 
 	TArray<TSharedPtr<FMeshRow>> MeshRows;
 	TSharedPtr<SListView<TSharedPtr<FMeshRow>>> MeshList;

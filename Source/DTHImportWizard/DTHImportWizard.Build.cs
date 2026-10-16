@@ -33,6 +33,7 @@ public class DTHImportWizard : ModuleRules
 			"MaterialEditor",
 			"AnimGraph",
 			"BlueprintGraph",
+			"FBX",
 			"ControlRig",
 			"ControlRigDeveloper",
 			"ControlRigEditor",

@@ -1,22 +1,26 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Steps/DTHMaterialPlan.h"
 
 class FDTHExport;
+class UMaterialInstanceConstant;
+class USkeletalMesh;
 struct FDTHImportReport;
-struct FDTHMeshEntry;
 
 namespace DTHImport
 {
 	/**
-	 * Materials/<slot> for every manifest material slot of Meshes, built before the meshes are imported so their
-	 * slots pick them up by name, as the DTH importer does:
-	 * - Skin, Cloth, Metal, Plastic and Glass slots: the slot's textures imported into Textures/, and a material
-	 *   instance under a per-character copy of DTH's master instance for the type (MI_<Character><Type>Master),
-	 *   with the textures set.
-	 * - Eye, EyeOcclusion and Tear slots: a per-character copy of DTH's eye, eye occlusion or lacrimal fluid
-	 *   instance (MI_<Character>Eyes, ...EyeOcclusion, ...Tear), which the slot of that name uses.
-	 * A slot whose material already exists is left alone.
+	 * Materials/<slot> for every planned slot, built before the meshes are imported so their slots pick them up by
+	 * name. Each slot's instance sits under a per-character copy of its family's DTH master (MI_<Character><Family>Master,
+	 * as the DTH importer copies them); Eye, EyeOcclusion and Tear slots ARE the copy, named after the slot. Textures
+	 * are imported into Textures/ under the plan's asset names with the plan's kind and green flip, set on the plan's
+	 * parameters with their "Use ..." switches. Existing instances are updated, existing textures reused.
+	 * Returns slot name -> material instance.
 	 */
-	void BuildMaterials(const FDTHExport& Export, const TArray<const FDTHMeshEntry*>& Meshes, const FString& DestinationFolder, FDTHImportReport& Report);
+	TMap<FString, UMaterialInstanceConstant*> BuildMaterials(const FDTHExport& Export, const TArray<FDTHMaterialPlan>& Plans,
+		const FString& DestinationFolder, FDTHImportReport& Report);
+
+	/** Puts each built material on every mesh slot of the same name (also on meshes that were reused, not imported). */
+	void AssignMaterials(const TArray<USkeletalMesh*>& Meshes, const TMap<FString, UMaterialInstanceConstant*>& Materials, FDTHImportReport& Report);
 }

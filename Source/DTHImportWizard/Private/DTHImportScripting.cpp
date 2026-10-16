@@ -9,6 +9,7 @@
 #include "Export/DTHExport.h"
 #include "Misc/Paths.h"
 #include "Steps/DTHImportRun.h"
+#include "Steps/DTHMergeCheck.h"
 #include "Steps/DTHSkeleton.h"
 
 TArray<FString> UDTHImportScripting::DescribeExport(const FString& ExportFolder)
@@ -40,6 +41,30 @@ TArray<FString> UDTHImportScripting::DescribeExport(const FString& ExportFolder)
 	for (const FDTHCurveFile& Curve : Export->CurveFiles)
 	{
 		Lines.Add(FString::Printf(TEXT("Curve file: %s %s"), *Curve.Category, *FPaths::GetCleanFilename(Curve.File)));
+	}
+	return Lines;
+}
+
+TArray<FString> UDTHImportScripting::CheckMaterialMerges(const FString& ExportFolder, const FString& DazExportFbx)
+{
+	TArray<FString> Lines;
+	FString Error;
+	const TSharedPtr<FDTHExport> Export = FDTHExport::Load(ExportFolder, Error);
+	if (!Export)
+	{
+		Lines.Add(TEXT("ERROR: ") + Error);
+		return Lines;
+	}
+	TArray<const FDTHMeshEntry*> Meshes;
+	for (const FDTHMeshEntry& Mesh : Export->Meshes)
+	{
+		if (Mesh.bInManifest) Meshes.Add(&Mesh);
+	}
+	FDTHImportReport Report;
+	DTHImport::ReportMaterialMerges(DTHImport::CheckMaterialMerges(*Export, Meshes, DazExportFbx), Report);
+	for (const FDTHImportMessage& Message : Report.Messages)
+	{
+		Lines.Add((Message.Severity == FDTHImportMessage::ESeverity::Warning ? TEXT("WARNING: ") : TEXT("")) + Message.Text.ToString());
 	}
 	return Lines;
 }

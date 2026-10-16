@@ -13,6 +13,7 @@
 #include "PropertyEditorModule.h"
 #include "Settings/DTHImportSettings.h"
 #include "Steps/DTHImportRun.h"
+#include "Steps/DTHMergeCheck.h"
 #include "Steps/DTHSkeleton.h"
 #include "Styling/AppStyle.h"
 #include "Styling/StyleColors.h"
@@ -255,6 +256,31 @@ TSharedRef<SWidget> SDTHImportWizard::MakeMeshesPage()
 					])
 			]
 
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
+			[
+				MakeSection(LOCTEXT("MergeSection", "Material Merges"),
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth()
+						[
+							SNew(SButton)
+							.Text(LOCTEXT("CheckMerges", "Check Material Merges"))
+							.ToolTipText(LOCTEXT("CheckMergesTip", "Compares each exported material slot with the Daz surfaces it was made from (Daz's own export in houdini/daz-export) and lists slots that merge surfaces with different textures. Baked slots are skipped. Also runs at the start of every import."))
+							.IsEnabled_Lambda([this]() { return Export.IsValid(); })
+							.OnClicked(this, &SDTHImportWizard::OnCheckMerges)
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+					[
+						SNew(STextBlock)
+						.AutoWrapText(true)
+						.Visibility_Lambda([this]() { return MergeCheckText.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+						.Text_Lambda([this]() { return MergeCheckText; })
+					])
+			]
+
 			+ SVerticalBox::Slot().FillHeight(1.f)
 			[
 				SAssignNew(MeshList, SListView<TSharedPtr<FMeshRow>>)
@@ -488,6 +514,31 @@ bool SDTHImportWizard::CanImport() const
 {
 	return Export.IsValid() && ExportError.IsEmpty() && !DestinationFolder.IsEmpty()
 		&& MeshRows.ContainsByPredicate([](const TSharedPtr<FMeshRow>& Row) { return Row->bImport; });
+}
+
+FReply SDTHImportWizard::OnCheckMerges()
+{
+	if (!Export.IsValid())
+	{
+		return FReply::Handled();
+	}
+	TArray<const FDTHMeshEntry*> Meshes;
+	for (const TSharedPtr<FMeshRow>& Row : MeshRows)
+	{
+		if (Row->bImport) Meshes.Add(&Export->Meshes[Row->MeshIndex]);
+	}
+	FScopedSlowTask Task(1.f, LOCTEXT("CheckingMerges", "Comparing material slots with Daz's export..."));
+	Task.MakeDialog();
+	Task.EnterProgressFrame();
+	FDTHImportReport Report;
+	DTHImport::ReportMaterialMerges(DTHImport::CheckMaterialMerges(*Export, Meshes), Report);
+	TArray<FString> Lines;
+	for (const FDTHImportMessage& Message : Report.Messages)
+	{
+		Lines.Add((Message.Severity == FDTHImportMessage::ESeverity::Warning ? TEXT("! ") : TEXT("")) + Message.Text.ToString());
+	}
+	MergeCheckText = FText::FromString(FString::Join(Lines, TEXT("\n\n")));
+	return FReply::Handled();
 }
 
 FReply SDTHImportWizard::OnImport()
