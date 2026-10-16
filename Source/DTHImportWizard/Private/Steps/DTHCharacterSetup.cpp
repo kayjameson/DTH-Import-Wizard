@@ -20,6 +20,7 @@
 #include "InterchangeGenericMeshPipeline.h"
 #include "InterchangeManager.h"
 #include "InterchangeSourceData.h"
+#include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -123,8 +124,10 @@ namespace
 UAnimBlueprint* DTHImport::PreparePostProcessBlueprint(const FDTHExport& Export, USkeleton* Skeleton, const FString& DestinationFolder, FDTHImportReport& Report)
 {
 	const FString StockPath = GetDefault<UDTHImportSettings>()->DazToHueAsset(StockPostProcessBlueprint(Export));
-	const FString CopyName = FString::Printf(TEXT("ABP_%s_PostProcess"), *AssetSafe(Export.Character));
-	const FString CopyPath = JoinPath(DestinationFolder, CopyName);
+	// Named and placed as the DTH importer does: Blueprints/ABP_<Character>.
+	const FString CopyFolder = JoinPath(DestinationFolder, TEXT("Blueprints"));
+	const FString CopyName = FString::Printf(TEXT("ABP_%s"), *AssetSafe(Export.Character));
+	const FString CopyPath = JoinPath(CopyFolder, CopyName);
 
 	if (UAnimBlueprint* Existing = LoadObject<UAnimBlueprint>(nullptr, *CopyPath, nullptr, LOAD_NoWarn | LOAD_Quiet))
 	{
@@ -140,7 +143,7 @@ UAnimBlueprint* DTHImport::PreparePostProcessBlueprint(const FDTHExport& Export,
 	}
 
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	UAnimBlueprint* Copy = Cast<UAnimBlueprint>(AssetTools.DuplicateAsset(CopyName, DestinationFolder, Stock));
+	UAnimBlueprint* Copy = Cast<UAnimBlueprint>(AssetTools.DuplicateAsset(CopyName, CopyFolder, Stock));
 	if (!Copy)
 	{
 		Report.Error(FText::Format(LOCTEXT("AbpCopyFailed", "Could not copy {0} to {1}."), FText::FromString(StockPath), FText::FromString(CopyPath)));
@@ -151,8 +154,23 @@ UAnimBlueprint* DTHImport::PreparePostProcessBlueprint(const FDTHExport& Export,
 		Copy->Modify();
 		Copy->TargetSkeleton = Skeleton;
 	}
-	FKismetEditorUtilities::CompileBlueprint(Copy);
+	FCompilerResultsLog Results;
+	Results.SetSourcePath(Copy->GetPathName());
+	Results.bSilentMode = true;
+	FKismetEditorUtilities::CompileBlueprint(Copy, EBlueprintCompileOptions::None, &Results);
 	Copy->MarkPackageDirty();
+	if (Copy->Status == BS_Error || Results.NumErrors > 0)
+	{
+		for (const TSharedRef<FTokenizedMessage>& Message : Results.Messages)
+		{
+			if (Message->GetSeverity() == EMessageSeverity::Error)
+			{
+				Report.Error(FText::Format(LOCTEXT("AbpCompileLine", "{0}: {1}"), FText::FromString(CopyName), Message->ToText()));
+			}
+		}
+		Report.Error(FText::Format(LOCTEXT("AbpCompileFailed", "{0} did not compile on {1}."), FText::FromString(CopyName), FText::FromString(Skeleton->GetName())));
+		return nullptr;
+	}
 	Report.Info(FText::Format(LOCTEXT("AbpCopied", "Post-process blueprint {0}: copy of {1} on {2}."),
 		FText::FromString(CopyName), FText::FromString(Stock->GetName()), FText::FromString(Skeleton->GetName())));
 	return Copy;
@@ -296,34 +314,12 @@ void DTHImport::BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, c
 	{
 		return;
 	}
-	// FAC, JCM and RET are DTH's core categories: on the UE5 Mannequin and DTH archetype skeletons DTH's own pose
-	// assets (already used by its post-process blueprint) serve them. Add-on categories such as GEN (Golden Palace 9
-	// guide) and FBM (Custom ROM guide) have no stock asset and are always built, then added to the blueprint by hand.
+	// Every exported category is built, FAC, JCM and RET included, as the DTH importer does.
 	const bool bStandard = IsStandardSkeleton(Skeleton);
-	TArray<FString> Skipped;
-	TArray<const FDTHPoseAssetEntry*> ToBuild;
-	for (const FDTHPoseAssetEntry& Entry : Export.PoseAssets)
-	{
-		if (bStandard && IsCoreCategory(Entry.Category))
-		{
-			Skipped.Add(Entry.Category);
-		}
-		else
-		{
-			ToBuild.Add(&Entry);
-		}
-	}
-	if (Skipped.Num() > 0)
-	{
-		Report.Info(FText::Format(LOCTEXT("PoseStandard", "Pose assets: on {0}, DTH's own {1} pose assets are used (not built from the export)."),
-			FText::FromString(Skeleton->GetName()), FText::FromString(FString::Join(Skipped, TEXT(", ")))));
-	}
-
 	const FString Folder = JoinPath(DestinationFolder, TEXT("PoseAssets"));
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	for (const FDTHPoseAssetEntry* EntryPtr : ToBuild)
+	for (const FDTHPoseAssetEntry& Entry : Export.PoseAssets)
 	{
-		const FDTHPoseAssetEntry& Entry = *EntryPtr;
 		FString Error;
 		UAnimSequence* Animation = ImportPoseAnimation(Entry.AnimationFile, Folder, Skeleton, Error);
 		if (!Animation)
@@ -337,12 +333,27 @@ void DTHImport::BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, c
 		{
 			PoseNames.RemoveAll([](FString& Line) { Line.TrimStartAndEndInline(); return Line.IsEmpty(); });
 		}
-		UPoseAssetFactory* Factory = NewObject<UPoseAssetFactory>();
-		Factory->SourceAnimation = Animation;
-		Factory->PoseNames = PoseNames;
-
-		const FString Name = FString::Printf(TEXT("PAS_%s_%s"), *AssetSafe(Export.Character), *AssetSafe(Entry.Category));
-		UPoseAsset* PoseAsset = Cast<UPoseAsset>(AssetTools.CreateAsset(Name, Folder, UPoseAsset::StaticClass(), Factory));
+		const FString Name = FString::Printf(TEXT("PA_%s%s"), *AssetSafe(Export.Character), *AssetSafe(Entry.Category));
+		UPoseAsset* PoseAsset = LoadObject<UPoseAsset>(nullptr, *JoinPath(Folder, Name), nullptr, LOAD_NoWarn | LOAD_Quiet);
+		if (PoseAsset)
+		{
+			// From an earlier import: rebuilt in place from this export, so anything referencing it keeps working.
+			TArray<FName> Names;
+			for (const FString& PoseName : PoseNames)
+			{
+				Names.AddUnique(FName(*PoseName));
+			}
+			PoseAsset->Modify();
+			PoseAsset->CreatePoseFromAnimation(Animation, &Names);
+			PoseAsset->SetSkeleton(Skeleton);
+		}
+		else
+		{
+			UPoseAssetFactory* Factory = NewObject<UPoseAssetFactory>();
+			Factory->SourceAnimation = Animation;
+			Factory->PoseNames = PoseNames;
+			PoseAsset = Cast<UPoseAsset>(AssetTools.CreateAsset(Name, Folder, UPoseAsset::StaticClass(), Factory));
+		}
 		if (!PoseAsset)
 		{
 			Report.Error(FText::Format(LOCTEXT("PoseCreateFailed", "Could not create pose asset {0}."), FText::FromString(Name)));
@@ -362,12 +373,13 @@ void DTHImport::BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, c
 		ObjectTools::ForceDeleteObjects({ Animation }, false);
 		Report.Info(FText::Format(LOCTEXT("PoseBuilt", "Built {0}: {1} poses, additive on {2}."),
 			FText::FromString(Name), PoseAsset->GetNumPoses(), FText::FromString(PoseNames.Num() > 0 ? PoseNames[0] : FString(TEXT("pose 0")))));
-		if (bStandard)
+		if (bStandard && !IsCoreCategory(Entry.Category))
 		{
-			// Golden Palace 9 guide steps 124-125: the post-process blueprint only evaluates the pose assets wired into it.
+			// Golden Palace 9 guide steps 124-125: an add-on category (GEN, FBM) is evaluated only once wired into
+			// the post-process blueprint copy. The importer doesn't wire any, so this stays a manual step.
 			FDTHManualStep& Step = Report.ManualSteps.AddDefaulted_GetRef();
 			Step.Title = FText::Format(LOCTEXT("PoseManualTitle", "Add {0} to the post-process blueprint"), FText::FromString(Name));
-			Step.Instructions.Add(FText::Format(LOCTEXT("PoseManual1", "Open ABP_{0}_PostProcess in {1}."), FText::FromString(AssetSafe(Export.Character)), FText::FromString(DestinationFolder)));
+			Step.Instructions.Add(FText::Format(LOCTEXT("PoseManual1", "Open ABP_{0} in {1}."), FText::FromString(AssetSafe(Export.Character)), FText::FromString(JoinPath(DestinationFolder, TEXT("Blueprints")))));
 			Step.Instructions.Add(FText::Format(LOCTEXT("PoseManual2", "Drag {0} (in {1}) into the AnimGraph and connect it just before Output Pose."), FText::FromString(Name), FText::FromString(Folder)));
 			Step.Instructions.Add(LOCTEXT("PoseManual3", "Compile and save."));
 		}

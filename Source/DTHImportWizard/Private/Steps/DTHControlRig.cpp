@@ -102,7 +102,7 @@ namespace
 UControlRigBlueprint* DTHImport::BuildControlRig(const FDTHExport& Export, USkeletalMesh* BodyMesh, const FString& DestinationFolder, FDTHImportReport& Report)
 {
 	const UDTHImportSettings* Settings = GetDefault<UDTHImportSettings>();
-	const FString RigName = FString::Printf(TEXT("CR_%s"), *AssetSafe(Export.Character));
+	const FString RigName = FString::Printf(TEXT("MCR_%s"), *AssetSafe(Export.Character));
 	FString Folder = DestinationFolder;
 	Folder.RemoveFromEnd(TEXT("/"));
 	const FString RigPath = Folder / RigName;

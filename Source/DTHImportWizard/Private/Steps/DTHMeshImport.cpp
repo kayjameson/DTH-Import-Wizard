@@ -8,6 +8,7 @@
 #include "InterchangeGenericAssetsPipelineSharedSettings.h"
 #include "InterchangeGenericMaterialPipeline.h"
 #include "InterchangeGenericMeshPipeline.h"
+#include "InterchangeGenericTexturePipeline.h"
 #include "InterchangeManager.h"
 #include "InterchangeSourceData.h"
 #include "Misc/Paths.h"
@@ -15,7 +16,11 @@
 
 namespace
 {
-	/** The pipeline Interchange runs instead of the project's defaults. It lives only for one import. */
+	/**
+	 * The pipeline Interchange runs instead of the project's defaults. It lives only for one import. Its settings
+	 * are the ones the DTH importer's skeletal mesh pipeline changes from the Interchange defaults; everything
+	 * else (morph targets on, skeletal meshes on, and so on) stays at the default, as there.
+	 */
 	UInterchangeGenericAssetsPipeline* MakeCharacterPipeline(USkeleton* Skeleton)
 	{
 		UInterchangeGenericAssetsPipeline* Pipeline = NewObject<UInterchangeGenericAssetsPipeline>(
@@ -23,14 +28,14 @@ namespace
 			RF_Transient);
 
 		Pipeline->CommonSkeletalMeshesAndAnimationsProperties->Skeleton = Skeleton;
-
-		Pipeline->MeshPipeline->bImportSkeletalMeshes = true;
-		Pipeline->MeshPipeline->bImportMorphTargets = true;
 		Pipeline->MeshPipeline->bCreatePhysicsAsset = false;
-
 		Pipeline->AnimationPipeline->bImportAnimations = false;
+		Pipeline->MaterialPipeline->TexturePipeline->bImportTextures = false;
 
-		Pipeline->MaterialPipeline->bImportMaterials = false;
+		// Slots look for existing material instances named after them under the destination folder (where the
+		// material step creates them) and never get new materials of their own.
+		Pipeline->MaterialPipeline->bCreateNewMaterials = false;
+		Pipeline->MaterialPipeline->SearchLocation = EInterchangeMaterialSearchLocation::UnderParent;
 		return Pipeline;
 	}
 }
@@ -75,8 +80,9 @@ USkeletalMesh* DTHImport::ImportSkeletalMesh(const FString& FbxFile, const FStri
 	}
 	if (Mesh->GetSkeleton() != Skeleton)
 	{
-		UE_LOG(LogDTHImport, Warning, TEXT("%s ended up on skeleton %s instead of %s."), *Mesh->GetName(),
+		OutError = FString::Printf(TEXT("%s ended up on skeleton %s instead of %s."), *Mesh->GetName(),
 			Mesh->GetSkeleton() ? *Mesh->GetSkeleton()->GetPathName() : TEXT("(none)"), *Skeleton->GetPathName());
+		return nullptr;
 	}
 	UE_LOG(LogDTHImport, Log, TEXT("Imported %s: %d material slots, %d morph targets."), *Mesh->GetPathName(),
 		Mesh->GetMaterials().Num(), Mesh->GetMorphTargets().Num());

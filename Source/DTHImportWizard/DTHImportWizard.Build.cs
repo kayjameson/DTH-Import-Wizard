@@ -30,6 +30,7 @@ public class DTHImportWizard : ModuleRules
 			"InterchangePipelines",
 			"AssetTools",
 			"SkeletalMeshEditor",
+			"MaterialEditor",
 			"ControlRig",
 			"ControlRigDeveloper",
 			"ControlRigEditor",

@@ -10,6 +10,7 @@
 #include "Misc/ScopedSlowTask.h"
 #include "Steps/DTHCharacterSetup.h"
 #include "Steps/DTHControlRig.h"
+#include "Steps/DTHMaterials.h"
 #include "ControlRigBlueprintLegacy.h"
 #include "Steps/DTHMeshImport.h"
 #include "Steps/DTHSkeleton.h"
@@ -57,12 +58,22 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 		return Report;
 	}
 
-	// Steps: one per mesh, then blueprint, setup, retargeting, pose assets, save.
-	FScopedSlowTask Task(Request.MeshIndices.Num() + 6, LOCTEXT("Task", "Importing DazToHue character"));
+	// Steps: materials, one per mesh, then blueprint, setup, retargeting, pose assets, control rig, save.
+	FScopedSlowTask Task(Request.MeshIndices.Num() + 7, LOCTEXT("Task", "Importing DazToHue character"));
 	Task.MakeDialog(true);
 
+	// Before the meshes, so their slots find the materials by name (DTH importer: process_fbx_materials ahead of each FBX).
+	Task.EnterProgressFrame(1.f, LOCTEXT("TaskMaterials", "Materials and textures"));
+	{
+		TArray<const FDTHMeshEntry*> MaterialMeshes;
+		for (const int32 MeshIndex : Request.MeshIndices)
+		{
+			MaterialMeshes.Add(&Export.Meshes[MeshIndex]);
+		}
+		BuildMaterials(Export, MaterialMeshes, Request.DestinationFolder, Report);
+	}
+
 	TArray<USkeletalMesh*> Meshes;
-	USkeletalMesh* Body = nullptr;
 	for (const int32 MeshIndex : Request.MeshIndices)
 	{
 		if (Task.ShouldCancel())
@@ -80,7 +91,6 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 			{
 				Report.Info(FText::Format(LOCTEXT("MeshReused", "{0} exists; reused (tick Reimport to replace it)."), FText::FromString(AssetPath)));
 				Meshes.Add(Existing);
-				Body = Entry.IsBody() ? Existing : Body;
 				continue;
 			}
 		}
@@ -90,16 +100,23 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 			Report.Info(FText::Format(LOCTEXT("MeshImported", "Imported {0}: {1} material slots, {2} morph targets."),
 				FText::FromString(Mesh->GetPathName()), Mesh->GetMaterials().Num(), Mesh->GetMorphTargets().Num()));
 			Meshes.Add(Mesh);
-			Body = Entry.IsBody() ? Mesh : Body;
 		}
 		else
 		{
+			// Every later step assumes each mesh is on the import skeleton.
 			Report.Error(FText::FromString(MeshError));
+			Report.Error(LOCTEXT("StoppedMesh", "Import stopped; nothing after this point was done."));
+			return Report;
 		}
 	}
 
 	Task.EnterProgressFrame(1.f, LOCTEXT("TaskAbp", "Post-process blueprint"));
 	UAnimBlueprint* PostProcess = PreparePostProcessBlueprint(Export, Skeleton, Request.DestinationFolder, Report);
+	if (!PostProcess)
+	{
+		Report.Error(LOCTEXT("StoppedAbp", "Import stopped; nothing after this point was done."));
+		return Report;
+	}
 
 	Task.EnterProgressFrame(1.f, LOCTEXT("TaskSetup", "Mesh setup and curves"));
 	for (USkeletalMesh* Mesh : Meshes)
@@ -115,14 +132,19 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 	BuildPoseAssets(Export, Skeleton, Request.DestinationFolder, Report);
 
 	Task.EnterProgressFrame(1.f, LOCTEXT("TaskRig", "Control rig"));
+	// On the first mesh, whatever its name, as the DTH importer builds MCR_<Character>.
 	UControlRigBlueprint* Rig = nullptr;
-	if (Body)
+	if (Meshes.Num() > 0)
 	{
-		Rig = BuildControlRig(Export, Body, Request.DestinationFolder, Report);
+		Rig = BuildControlRig(Export, Meshes[0], Request.DestinationFolder, Report);
+		if (!Rig)
+		{
+			Report.Error(LOCTEXT("NoRig", "The control rig was not built (see above)."));
+		}
 	}
 	else
 	{
-		Report.Warning(LOCTEXT("NoBody", "No body mesh among the imported meshes; control rig skipped."));
+		Report.Error(LOCTEXT("NoMeshes", "No meshes were imported, so there is nothing to build the control rig on."));
 	}
 
 	Task.EnterProgressFrame(1.f, LOCTEXT("TaskSave", "Saving"));
