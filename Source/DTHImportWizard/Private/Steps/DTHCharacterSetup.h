@@ -32,9 +32,10 @@ namespace DTHImport
 	/**
 	 * PoseAssets/PA_<Character><Type>: one pose asset per exported category, additive on its first (rest) pose,
 	 * as the DTH importer builds them. Add-on categories (not FAC/JCM/RET) on the UE5 Mannequin or a DTH archetype
-	 * skeleton get a manual step for adding them to the post-process blueprint copy.
+	 * skeleton are added to the character's post-process blueprint copy just before Output Pose, as the GP9 guide
+	 * does by hand (steps 123-125); if that fails they become a manual step.
 	 */
-	void BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, const FString& DestinationFolder, FDTHImportReport& Report);
+	void BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, const FString& DestinationFolder, UAnimBlueprint* PostProcess, FDTHImportReport& Report);
 
 	/** The curve names in an AnimCurveViewer paste file. */
 	TArray<FName> ReadCurveNames(const FString& File);

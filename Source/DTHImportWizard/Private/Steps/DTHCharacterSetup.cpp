@@ -1,6 +1,9 @@
 #include "Steps/DTHCharacterSetup.h"
 
+#include "AnimGraphNode_PoseBlendNode.h"
+#include "AnimGraphNode_Root.h"
 #include "Animation/AnimBlueprint.h"
+#include "Animation/AnimNodeBase.h"
 #include "Animation/AnimCurveMetadata.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/MeshDeformer.h"
@@ -8,6 +11,8 @@
 #include "Animation/Skeleton.h"
 #include "AssetToolsModule.h"
 #include "DTHImportLog.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraphSchema_K2.h"
 #include "Editor.h"
 #include "Engine/SkeletalMesh.h"
 #include "Export/DTHExport.h"
@@ -20,6 +25,7 @@
 #include "InterchangeGenericMeshPipeline.h"
 #include "InterchangeManager.h"
 #include "InterchangeSourceData.h"
+#include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/FileHelper.h"
@@ -89,6 +95,119 @@ namespace
 		return Slot;
 	}
 
+	/** Compiles the post-process blueprint copy; errors go to the report and the result is false. */
+	bool CompilePostProcess(UAnimBlueprint* Blueprint, FDTHImportReport& Report)
+	{
+		FCompilerResultsLog Results;
+		Results.SetSourcePath(Blueprint->GetPathName());
+		Results.bSilentMode = true;
+		FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::None, &Results);
+		Blueprint->MarkPackageDirty();
+		if (Blueprint->Status != BS_Error && Results.NumErrors == 0)
+		{
+			return true;
+		}
+		for (const TSharedRef<FTokenizedMessage>& Message : Results.Messages)
+		{
+			if (Message->GetSeverity() == EMessageSeverity::Error)
+			{
+				Report.Error(FText::Format(LOCTEXT("AbpCompileLine", "{0}: {1}"), FText::FromString(Blueprint->GetName()), Message->ToText()));
+			}
+		}
+		Report.Error(FText::Format(LOCTEXT("AbpCompileFailed", "{0} did not compile."), FText::FromString(Blueprint->GetName())));
+		return false;
+	}
+
+	/** The first pin of Node in Direction that carries a local-space pose. */
+	UEdGraphPin* PosePin(UEdGraphNode* Node, EEdGraphPinDirection Direction)
+	{
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin->Direction == Direction && Pin->PinType.PinSubCategoryObject == FPoseLink::StaticStruct())
+			{
+				return Pin;
+			}
+		}
+		return nullptr;
+	}
+
+	/**
+	 * A Pose Blend node for Pose (what dragging a pose asset into the AnimGraph creates) inserted between the node
+	 * feeding Output Pose and Output Pose, as GP9 guide steps 124-125 do. A node for the same pose asset that is
+	 * already there (an earlier import into the same folder) is left as it is.
+	 */
+	bool AddPoseAssetBeforeOutput(UAnimBlueprint* Blueprint, UPoseAsset* Pose, FString& OutError)
+	{
+		UEdGraph* AnimGraph = nullptr;
+		for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+		{
+			if (Graph && Graph->GetFName() == UEdGraphSchema_K2::GN_AnimGraph)
+			{
+				AnimGraph = Graph;
+				break;
+			}
+		}
+		if (!AnimGraph)
+		{
+			OutError = TEXT("no AnimGraph");
+			return false;
+		}
+		UAnimGraphNode_Root* Root = nullptr;
+		for (UEdGraphNode* Node : AnimGraph->Nodes)
+		{
+			if (UAnimGraphNode_PoseBlendNode* Existing = Cast<UAnimGraphNode_PoseBlendNode>(Node); Existing && Existing->GetAnimationAsset() == Pose)
+			{
+				return true;
+			}
+			Root = Root ? Root : Cast<UAnimGraphNode_Root>(Node);
+		}
+		UEdGraphPin* Result = Root ? PosePin(Root, EGPD_Input) : nullptr;
+		if (!Result)
+		{
+			OutError = TEXT("no Output Pose node");
+			return false;
+		}
+		UEdGraphPin* Upstream = Result->LinkedTo.Num() > 0 ? Result->LinkedTo[0] : nullptr;
+
+		AnimGraph->Modify();
+		FGraphNodeCreator<UAnimGraphNode_PoseBlendNode> Creator(*AnimGraph);
+		UAnimGraphNode_PoseBlendNode* Blend = Creator.CreateNode();
+		Blend->SetAnimationAsset(Pose);
+		Blend->NodePosX = Root->NodePosX;
+		Blend->NodePosY = Root->NodePosY;
+		Creator.Finalize();
+		Root->Modify();
+		Root->NodePosX += 320;
+
+		UEdGraphPin* Source = PosePin(Blend, EGPD_Input);
+		UEdGraphPin* Out = PosePin(Blend, EGPD_Output);
+		const UEdGraphSchema* Schema = AnimGraph->GetSchema();
+		if (!Source || !Out)
+		{
+			AnimGraph->RemoveNode(Blend);
+			OutError = TEXT("the Pose Blend node has no pose pins");
+			return false;
+		}
+		if (Upstream)
+		{
+			Schema->BreakSinglePinLink(Upstream, Result);
+			if (!Schema->TryCreateConnection(Upstream, Source))
+			{
+				Schema->TryCreateConnection(Upstream, Result);
+				AnimGraph->RemoveNode(Blend);
+				OutError = TEXT("the pose feeding Output Pose could not be connected to it");
+				return false;
+			}
+		}
+		if (!Schema->TryCreateConnection(Out, Result))
+		{
+			OutError = TEXT("it could not be connected to Output Pose");
+			return false;
+		}
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+		return true;
+	}
+
 	UAnimSequence* ImportPoseAnimation(const FString& File, const FString& Folder, USkeleton* Skeleton, FString& OutError)
 	{
 		TStrongObjectPtr<UInterchangeGenericAssetsPipeline> Pipeline(NewObject<UInterchangeGenericAssetsPipeline>(
@@ -154,21 +273,9 @@ UAnimBlueprint* DTHImport::PreparePostProcessBlueprint(const FDTHExport& Export,
 		Copy->Modify();
 		Copy->TargetSkeleton = Skeleton;
 	}
-	FCompilerResultsLog Results;
-	Results.SetSourcePath(Copy->GetPathName());
-	Results.bSilentMode = true;
-	FKismetEditorUtilities::CompileBlueprint(Copy, EBlueprintCompileOptions::None, &Results);
-	Copy->MarkPackageDirty();
-	if (Copy->Status == BS_Error || Results.NumErrors > 0)
+	if (!CompilePostProcess(Copy, Report))
 	{
-		for (const TSharedRef<FTokenizedMessage>& Message : Results.Messages)
-		{
-			if (Message->GetSeverity() == EMessageSeverity::Error)
-			{
-				Report.Error(FText::Format(LOCTEXT("AbpCompileLine", "{0}: {1}"), FText::FromString(CopyName), Message->ToText()));
-			}
-		}
-		Report.Error(FText::Format(LOCTEXT("AbpCompileFailed", "{0} did not compile on {1}."), FText::FromString(CopyName), FText::FromString(Skeleton->GetName())));
+		Report.Error(FText::Format(LOCTEXT("AbpCompileOnSkeleton", "{0} did not compile on {1}."), FText::FromString(CopyName), FText::FromString(Skeleton->GetName())));
 		return nullptr;
 	}
 	Report.Info(FText::Format(LOCTEXT("AbpCopied", "Post-process blueprint {0}: copy of {1} on {2}."),
@@ -308,12 +415,13 @@ void DTHImport::ApplyRetargeting(const FDTHExport& Export, USkeleton* Skeleton, 
 		FText::FromString(Skeleton->GetName())));
 }
 
-void DTHImport::BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, const FString& DestinationFolder, FDTHImportReport& Report)
+void DTHImport::BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, const FString& DestinationFolder, UAnimBlueprint* PostProcess, FDTHImportReport& Report)
 {
 	if (Export.PoseAssets.IsEmpty())
 	{
 		return;
 	}
+	TArray<FString> AddedToPostProcess;
 	// Every exported category is built, FAC, JCM and RET included, as the DTH importer does.
 	const bool bStandard = IsStandardSkeleton(Skeleton);
 	const FString Folder = JoinPath(DestinationFolder, TEXT("PoseAssets"));
@@ -375,14 +483,31 @@ void DTHImport::BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, c
 			FText::FromString(Name), PoseAsset->GetNumPoses(), FText::FromString(PoseNames.Num() > 0 ? PoseNames[0] : FString(TEXT("pose 0")))));
 		if (bStandard && !IsCoreCategory(Entry.Category))
 		{
-			// Golden Palace 9 guide steps 124-125: an add-on category (GEN, FBM) is evaluated only once wired into
-			// the post-process blueprint copy. The importer doesn't wire any, so this stays a manual step.
-			FDTHManualStep& Step = Report.ManualSteps.AddDefaulted_GetRef();
-			Step.Title = FText::Format(LOCTEXT("PoseManualTitle", "Add {0} to the post-process blueprint"), FText::FromString(Name));
-			Step.Instructions.Add(FText::Format(LOCTEXT("PoseManual1", "Open ABP_{0} in {1}."), FText::FromString(AssetSafe(Export.Character)), FText::FromString(JoinPath(DestinationFolder, TEXT("Blueprints")))));
-			Step.Instructions.Add(FText::Format(LOCTEXT("PoseManual2", "Drag {0} (in {1}) into the AnimGraph and connect it just before Output Pose."), FText::FromString(Name), FText::FromString(Folder)));
-			Step.Instructions.Add(LOCTEXT("PoseManual3", "Compile and save."));
+			// Golden Palace 9 guide steps 123-125: an add-on category (GEN, FBM) is evaluated only once its pose
+			// asset sits in the character's post-process blueprint copy, "just before the Output Pose node". DTH's
+			// stock blueprint drives JCM and FAC itself; the add-on poses' curves (pasGp9*) reach nothing otherwise.
+			FString WireError;
+			if (PostProcess && AddPoseAssetBeforeOutput(PostProcess, PoseAsset, WireError))
+			{
+				AddedToPostProcess.Add(Name);
+			}
+			else
+			{
+				Report.Warning(FText::Format(LOCTEXT("PoseWireFailed", "{0} could not be added to the post-process blueprint ({1}); it is a manual step."),
+					FText::FromString(Name), FText::FromString(PostProcess ? WireError : FString(TEXT("no post-process blueprint")))));
+				FDTHManualStep& Step = Report.ManualSteps.AddDefaulted_GetRef();
+				Step.Title = FText::Format(LOCTEXT("PoseManualTitle", "Add {0} to the post-process blueprint"), FText::FromString(Name));
+				Step.Instructions.Add(FText::Format(LOCTEXT("PoseManual1", "Open ABP_{0} in {1}."), FText::FromString(AssetSafe(Export.Character)), FText::FromString(JoinPath(DestinationFolder, TEXT("Blueprints")))));
+				Step.Instructions.Add(FText::Format(LOCTEXT("PoseManual2", "Drag {0} (in {1}) into the AnimGraph and connect it just before Output Pose."), FText::FromString(Name), FText::FromString(Folder)));
+				Step.Instructions.Add(LOCTEXT("PoseManual3", "Compile and save."));
+			}
 		}
+	}
+
+	if (AddedToPostProcess.Num() > 0 && CompilePostProcess(PostProcess, Report))
+	{
+		Report.Info(FText::Format(LOCTEXT("PoseWired", "{0}: added {1} before Output Pose (GP9 guide 123-125)."),
+			FText::FromString(PostProcess->GetName()), FText::FromString(FString::Join(AddedToPostProcess, TEXT(", ")))));
 	}
 }
 

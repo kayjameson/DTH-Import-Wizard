@@ -129,7 +129,7 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 	ApplyRetargeting(Export, Skeleton, Report);
 
 	Task.EnterProgressFrame(1.f, LOCTEXT("TaskPoses", "Pose assets"));
-	BuildPoseAssets(Export, Skeleton, Request.DestinationFolder, Report);
+	BuildPoseAssets(Export, Skeleton, Request.DestinationFolder, PostProcess, Report);
 
 	Task.EnterProgressFrame(1.f, LOCTEXT("TaskRig", "Control rig"));
 	// On the first mesh, whatever its name, as the DTH importer builds MCR_<Character>.
