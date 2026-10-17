@@ -20,6 +20,7 @@
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSegmentedControl.h"
 #include "Widgets/Layout/SBorder.h"
@@ -42,8 +43,27 @@ namespace
 	const FName ColumnSlots(TEXT("Slots"));
 }
 
+TWeakPtr<SDTHImportWizard> SDTHImportWizard::Instance;
+
+bool SDTHImportWizard::ShowPage(const FString& Name)
+{
+	static const TPair<const TCHAR*, EPage> PageNames[] = {
+		{ TEXT("Settings"), EPage::ProjectSettings }, { TEXT("Meshes"), EPage::MeshesAndRig }, { TEXT("Materials"), EPage::Materials },
+		{ TEXT("Grooms"), EPage::Grooms }, { TEXT("Import"), EPage::Import } };
+	for (const auto& Page : PageNames)
+	{
+		if (Name.Equals(Page.Key, ESearchCase::IgnoreCase))
+		{
+			CurrentPage = Page.Value;
+			return true;
+		}
+	}
+	return false;
+}
+
 void SDTHImportWizard::Construct(const FArguments& InArgs)
 {
+	Instance = SharedThis(this);
 	ChildSlot
 	[
 		SNew(SBorder)
@@ -74,11 +94,7 @@ void SDTHImportWizard::Construct(const FArguments& InArgs)
 
 				+ SWidgetSwitcher::Slot()[MakeSettingsPage()]
 				+ SWidgetSwitcher::Slot()[MakeMeshesPage()]
-				+ SWidgetSwitcher::Slot()
-				[
-					MakePlaceholderPage(LOCTEXT("MaterialsTitle", "Materials & Textures"),
-						LOCTEXT("MaterialsBody", "One material instance per slot, parented to the DazToHue materials, with the export's textures."))
-				]
+				+ SWidgetSwitcher::Slot()[MakeMaterialsPage()]
 				+ SWidgetSwitcher::Slot()
 				[
 					MakePlaceholderPage(LOCTEXT("GroomsTitle", "Grooms"),
@@ -354,6 +370,247 @@ TSharedRef<ITableRow> SDTHImportWizard::MakeMeshRow(TSharedPtr<FMeshRow> Row, co
 	return SNew(SMeshRow, Owner, Row, Export);
 }
 
+TSharedRef<SWidget> SDTHImportWizard::MakeMaterialsPage()
+{
+	for (const FString& Parent : DTHImport::MaterialParents())
+	{
+		ParentOptions.Add(MakeShared<FString>(Parent));
+	}
+	return SNew(SBorder)
+		.BorderImage(FAppStyle::GetBrush("Brushes.Recessed"))
+		.Padding(8.f)
+		[
+			SNew(SVerticalBox)
+
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
+			[
+				MakeSection(LOCTEXT("MaterialsSection", "Materials & Textures"),
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock)
+						.AutoWrapText(true)
+						.Text(LOCTEXT("MaterialsHelp", "One material instance per slot, under a per-character copy of its DazToHue parent. Defaults come from the export: the manifest's textures, matching maps found next to them (SSS, specular...), and clothing DTH types as Skin set to Cloth. Change a slot's parent, or browse for a texture, and the import uses what is shown here."))
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth()
+						[
+							SNew(SButton)
+							.Text(LOCTEXT("ResetMaterials", "Reset from Export"))
+							.ToolTipText(LOCTEXT("ResetMaterialsTip", "Throw away changes made here and rebuild every slot's material from the export."))
+							.IsEnabled_Lambda([this]() { return Export.IsValid(); })
+							.OnClicked_Lambda([this]() { ResetMaterialPlan(); return FReply::Handled(); })
+						]
+						+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(12.f, 0.f, 0.f, 0.f)
+						[
+							SNew(STextBlock)
+							.Text_Lambda([this]()
+							{
+								int32 Problems = 0;
+								for (const FDTHMaterialPlan& Plan : MaterialPlans)
+								{
+									for (const FDTHTextureRow& Row : Plan.Textures) Problems += Row.bProblem ? 1 : 0;
+								}
+								return Export.IsValid()
+									? FText::Format(LOCTEXT("MaterialsSummary", "{0} slots, {1} textures missing"), MaterialPlans.Num(), Problems)
+									: LOCTEXT("MaterialsNoExport", "Open an export to see its materials.");
+							})
+						]
+					])
+			]
+
+			+ SVerticalBox::Slot().FillHeight(1.f)
+			[
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				[
+					SAssignNew(MaterialsBox, SVerticalBox)
+				]
+			]
+		];
+}
+
+void SDTHImportWizard::ResetMaterialPlan()
+{
+	MaterialPlans.Reset();
+	if (Export.IsValid())
+	{
+		TArray<const FDTHMeshEntry*> Meshes;
+		for (const FDTHMeshEntry& Mesh : Export->Meshes)
+		{
+			if (Mesh.bInManifest) Meshes.Add(&Mesh);
+		}
+		MaterialPlans = DTHImport::BuildMaterialPlan(*Export, Meshes);
+	}
+	RefreshMaterialsPage();
+}
+
+void SDTHImportWizard::RefreshMaterialsPage()
+{
+	if (bMaterialsRefreshPending) return;
+	bMaterialsRefreshPending = true;
+	// Next tick: this is often called from inside one of the widgets about to be replaced.
+	RegisterActiveTimer(0.f, FWidgetActiveTimerDelegate::CreateLambda([this](double, float)
+	{
+		bMaterialsRefreshPending = false;
+		if (MaterialsBox)
+		{
+			MaterialsBox->ClearChildren();
+			FString LastMesh;
+			for (int32 Index = 0; Index < MaterialPlans.Num(); ++Index)
+			{
+				if (MaterialPlans[Index].Mesh != LastMesh)
+				{
+					LastMesh = MaterialPlans[Index].Mesh;
+					MaterialsBox->AddSlot().AutoHeight().Padding(0.f, Index == 0 ? 0.f : 10.f, 0.f, 4.f)
+					[
+						SNew(STextBlock).Font(FAppStyle::GetFontStyle("BoldFont")).Text(FText::FromString(LastMesh))
+					];
+				}
+				MaterialsBox->AddSlot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)[MakeMaterialSlot(Index)];
+			}
+		}
+		return EActiveTimerReturnType::Stop;
+	}));
+}
+
+TSharedRef<SWidget> SDTHImportWizard::MakeMaterialSlot(int32 PlanIndex)
+{
+	const FDTHMaterialPlan& Plan = MaterialPlans[PlanIndex];
+	TSharedPtr<FString> Current;
+	for (const TSharedPtr<FString>& Option : ParentOptions)
+	{
+		if (*Option == Plan.Parent) Current = Option;
+	}
+
+	TSharedRef<SVerticalBox> Rows = SNew(SVerticalBox);
+	for (int32 RowIndex = 0; RowIndex < Plan.Textures.Num(); ++RowIndex)
+	{
+		const FDTHTextureRow& Row = Plan.Textures[RowIndex];
+		const FText File = Row.Source.IsEmpty()
+			? (Row.bProblem ? FText::FromString(Row.Why) : LOCTEXT("NoTexture", "none"))
+			: FText::FromString(FPaths::GetCleanFilename(Row.Source));
+		const FText Tip = FText::FromString(Row.Source.IsEmpty() ? Row.Why
+			: FString::Printf(TEXT("%s\n\nAsset: %s%s\nWhy: %s"), *Row.Source, *Row.AssetName, Row.bFlipGreen ? TEXT(" (green flipped: OpenGL normal map)") : TEXT(""), *Row.Why));
+		Rows->AddSlot().AutoHeight().Padding(16.f, 1.f, 0.f, 1.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(230.f)
+				[
+					SNew(STextBlock).Text(FText::FromString(Row.Parameter))
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Text(File)
+				.ToolTipText(Tip)
+				.ColorAndOpacity(Row.bProblem ? FSlateColor(FStyleColors::Warning) : Row.Source.IsEmpty() ? FSlateColor::UseSubduedForeground() : FSlateColor::UseForeground())
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(4.f, 0.f, 0.f, 0.f)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("BrowseTexture", "Browse..."))
+				.ToolTipText(LOCTEXT("BrowseTextureTip", "Choose the texture file for this parameter."))
+				.OnClicked(this, &SDTHImportWizard::OnBrowseTexture, PlanIndex, RowIndex)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(4.f, 0.f, 0.f, 0.f)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("ClearTexture", "Clear"))
+				.ToolTipText(LOCTEXT("ClearTextureTip", "Leave this parameter at the parent material's default."))
+				.IsEnabled(!Row.Source.IsEmpty() || Row.bProblem)
+				.OnClicked_Lambda([this, PlanIndex, RowIndex]()
+				{
+					DTHImport::SetSlotTexture(MaterialPlans, PlanIndex, RowIndex, FString(), *Export);
+					RefreshMaterialsPage();
+					return FReply::Handled();
+				})
+			]
+		];
+	}
+
+	const bool bProblem = Plan.Textures.ContainsByPredicate([](const FDTHTextureRow& Row) { return Row.bProblem; });
+	FString Short = Plan.Slot;
+	if (Export.IsValid()) Short.RemoveFromStart(TEXT("MI_") + Export->Character);
+	return SNew(SBorder)
+		.BorderImage(FAppStyle::GetBrush("Brushes.Panel"))
+		.Padding(6.f)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 3.f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 6.f, 0.f)
+				[
+					SNew(SImage)
+					.Visibility(bProblem ? EVisibility::Visible : EVisibility::Collapsed)
+					.Image(FAppStyle::GetBrush("Icons.WarningWithColor"))
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(STextBlock).Font(FAppStyle::GetFontStyle("BoldFont")).Text(FText::FromString(Short)).ToolTipText(FText::FromString(Plan.Slot))
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					SNew(STextBlock)
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+					.Text(FText::Format(LOCTEXT("ManifestType", "manifest type: {0}"), FText::FromString(Plan.Type.IsEmpty() ? TEXT("-") : Plan.Type)))
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 6.f, 0.f)
+				[
+					SNew(STextBlock).Text(LOCTEXT("ParentLabel", "Parent"))
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SComboBox<TSharedPtr<FString>>)
+					.OptionsSource(&ParentOptions)
+					.InitiallySelectedItem(Current)
+					.OnGenerateWidget_Lambda([](TSharedPtr<FString> Option) { return SNew(STextBlock).Text(FText::FromString(*Option)); })
+					.OnSelectionChanged_Lambda([this, PlanIndex](TSharedPtr<FString> Option, ESelectInfo::Type)
+					{
+						if (Option && MaterialPlans.IsValidIndex(PlanIndex) && *Option != MaterialPlans[PlanIndex].Parent)
+						{
+							DTHImport::SetSlotParent(MaterialPlans, PlanIndex, *Option, *Export);
+							RefreshMaterialsPage();
+						}
+					})
+					[
+						SNew(STextBlock).Text(FText::FromString(Plan.Parent))
+					]
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				Rows
+			]
+		];
+}
+
+FReply SDTHImportWizard::OnBrowseTexture(int32 PlanIndex, int32 RowIndex)
+{
+	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+	if (!DesktopPlatform || !Export.IsValid() || !MaterialPlans.IsValidIndex(PlanIndex) || !MaterialPlans[PlanIndex].Textures.IsValidIndex(RowIndex))
+	{
+		return FReply::Handled();
+	}
+	const FDTHTextureRow& Row = MaterialPlans[PlanIndex].Textures[RowIndex];
+	TArray<FString> Chosen;
+	const void* ParentWindow = FSlateApplication::Get().FindBestParentWindowHandleForDialogs(AsShared());
+	const FString StartDir = Row.Source.IsEmpty() ? Export->Folder : FPaths::GetPath(Row.Source);
+	if (DesktopPlatform->OpenFileDialog(ParentWindow, FText::Format(LOCTEXT("BrowseTextureTitle", "Texture for {0}"), FText::FromString(Row.Parameter)).ToString(),
+		StartDir, FString(), TEXT("Images|*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.tga;*.bmp;*.exr;*.psd|All files|*.*"), EFileDialogFlags::None, Chosen) && Chosen.Num() > 0)
+	{
+		DTHImport::SetSlotTexture(MaterialPlans, PlanIndex, RowIndex, Chosen[0], *Export);
+		RefreshMaterialsPage();
+	}
+	return FReply::Handled();
+}
+
 TSharedRef<SWidget> SDTHImportWizard::MakePlaceholderPage(const FText& Title, const FText& Body)
 {
 	return SNew(SBorder)
@@ -508,6 +765,8 @@ void SDTHImportWizard::LoadExport(const FString& Folder)
 	{
 		MeshList->RequestListRefresh();
 	}
+	MergeCheckText = FText::GetEmpty();
+	ResetMaterialPlan();
 }
 
 bool SDTHImportWizard::CanImport() const
@@ -547,6 +806,7 @@ FReply SDTHImportWizard::OnImport()
 	Request.Export = Export;
 	Request.DestinationFolder = DestinationFolder;
 	Request.bReimportExistingMeshes = bReimportExistingMeshes;
+	Request.MaterialPlans = MaterialPlans;
 	for (const TSharedPtr<FMeshRow>& Row : MeshRows)
 	{
 		if (Row->bImport)

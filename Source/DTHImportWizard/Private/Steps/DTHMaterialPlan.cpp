@@ -298,6 +298,62 @@ namespace
 	};
 }
 
+namespace
+{
+	FString ShortSlotOf(const FString& Slot, const FString& Character)
+	{
+		FString Short = Slot;
+		if (!Short.RemoveFromStart(TEXT("MI_") + Character))
+		{
+			Short.RemoveFromStart(TEXT("MI_"));
+		}
+		return Sanitize(Short.IsEmpty() ? Slot : Short);
+	}
+
+	/**
+	 * Names Row's texture asset: the name another row already gave the same file (one asset per file), else
+	 * T_<Character>_<Slot>_<Role> (after the file when 3+ slots share it), made unique against other files' names.
+	 */
+	void NameRow(const TArray<FDTHMaterialPlan>& Plans, int32 PlanIndex, FDTHTextureRow& Row, const FDTHExport& Export, const TMap<FString, int32>* Uses)
+	{
+		const FString Token = Sanitize(Export.Character);
+		const FString SlotName = FString::Printf(TEXT("T_%s_%s_%s"), *Token, *ShortSlotOf(Plans[PlanIndex].Slot, Export.Character),
+			Row.Role.IsEmpty() ? TEXT("Tex") : *RoleSuffix().FindRef(Row.Role));
+		if (Row.Source.IsEmpty())
+		{
+			Row.AssetName = SlotName;
+			return;
+		}
+		auto ForOtherRows = [&](auto&& Visit)
+		{
+			for (const FDTHMaterialPlan& Plan : Plans)
+			{
+				for (const FDTHTextureRow& Other : Plan.Textures)
+				{
+					if (&Other != &Row && !Other.Source.IsEmpty() && !Other.AssetName.IsEmpty()) Visit(Other);
+				}
+			}
+		};
+		FString Shared;
+		ForOtherRows([&](const FDTHTextureRow& Other) { if (Shared.IsEmpty() && Other.Source.Equals(Row.Source, ESearchCase::IgnoreCase)) Shared = Other.AssetName; });
+		if (!Shared.IsEmpty())
+		{
+			Row.AssetName = Shared;
+			return;
+		}
+		const int32 Count = Uses ? Uses->FindRef(Row.Source.ToLower()) : 0;
+		FString Name = Count >= 3 ? FString::Printf(TEXT("T_%s_%s"), *Token, *Sanitize(FPaths::GetBaseFilename(Row.Source))) : SlotName;
+		for (int32 Suffix = 2;; ++Suffix)
+		{
+			bool bTaken = false;
+			ForOtherRows([&](const FDTHTextureRow& Other) { bTaken |= Other.AssetName == Name && !Other.Source.Equals(Row.Source, ESearchCase::IgnoreCase); });
+			if (!bTaken) break;
+			Name = FString::Printf(TEXT("%s_%d"), *SlotName, Suffix);
+		}
+		Row.AssetName = Name;
+	}
+}
+
 FString DTHImport::ParentMaterialPath(const FString& Parent)
 {
 	static const TMap<FString, FString> Paths = {
@@ -317,9 +373,8 @@ FString DTHImport::ParentMaterialPath(const FString& Parent)
 TArray<FDTHMaterialPlan> DTHImport::BuildMaterialPlan(const FDTHExport& Export, const TArray<const FDTHMeshEntry*>& Meshes)
 {
 	FPlanner Planner(Export);
-	const FString Token = Sanitize(Export.Character);
 
-	struct FGuess { const FDTHMaterialSlot* Material; FString Parent; TMap<FString, FPlanner::FFound> Found; };
+	struct FGuess { const FDTHMaterialSlot* Material; FString Mesh; FString Parent; TMap<FString, FPlanner::FFound> Found; };
 	TArray<FGuess> Guesses;
 	TSet<FString> SeenSlots;
 	for (const FDTHMeshEntry* Mesh : Meshes)
@@ -333,7 +388,7 @@ TArray<FDTHMaterialPlan> DTHImport::BuildMaterialPlan(const FDTHExport& Export, 
 			{
 				Parent = TEXT("Cloth");
 			}
-			Guesses.Add({ &Material, Parent, Planner.Textures(Material) });
+			Guesses.Add({ &Material, Mesh->Name.IsEmpty() ? FPaths::GetBaseFilename(Mesh->File) : Mesh->Name, Parent, Planner.Textures(Material) });
 		}
 	}
 
@@ -347,51 +402,88 @@ TArray<FDTHMaterialPlan> DTHImport::BuildMaterialPlan(const FDTHExport& Export, 
 		}
 	}
 
-	TMap<FString, FString> NameForSource; // lower-case source -> asset name, so a shared file imports once
-	TMap<FString, FString> SourceForName; // asset name -> lower-case source, so two files never share a name
+	// Every texture parameter of the slot's parent gets a row; the ones nothing was found for stay empty, so the wizard
+	// can offer them.
 	TArray<FDTHMaterialPlan> Plans;
 	for (const FGuess& Guess : Guesses)
 	{
 		FDTHMaterialPlan& Plan = Plans.AddDefaulted_GetRef();
 		Plan.Slot = Guess.Material->Slot;
+		Plan.Mesh = Guess.Mesh;
 		Plan.Type = Guess.Material->Type;
 		Plan.Parent = Guess.Parent;
-		const FString Short = Planner.ShortSlot(Plan.Slot);
 		const TMap<FString, FString>& Parameters = RoleParameters(Plan.Parent);
 		for (const TCHAR* Role : Roles)
 		{
-			const FPlanner::FFound* Found = Guess.Found.Find(Role);
 			const FString* Parameter = Parameters.Find(Role);
-			if (!Found || !Parameter) continue;
+			if (!Parameter) continue;
 			FDTHTextureRow& Row = Plan.Textures.AddDefaulted_GetRef();
+			Row.Role = Role;
 			Row.Parameter = *Parameter;
 			Row.Kind = RoleKind(Role);
-			Row.Why = Found->Why;
-			Row.bProblem = Found->bProblem;
-			const FString SlotName = FString::Printf(TEXT("T_%s_%s_%s"), *Token, *Short, *RoleSuffix()[Role]);
-			if (Found->Source.IsEmpty())
+			if (const FPlanner::FFound* Found = Guess.Found.Find(Role))
 			{
-				Row.AssetName = SlotName;
-				continue;
+				Row.Source = Found->Source;
+				Row.Why = Found->Why;
+				Row.bProblem = Found->bProblem;
+				Row.bFlipGreen = Row.Kind == EDTHTextureKind::Normal && !Row.Source.IsEmpty() && WantsGreenFlip(Row.Source);
 			}
-			Row.Source = Found->Source;
-			Row.bFlipGreen = Row.Kind == EDTHTextureKind::Normal && WantsGreenFlip(Found->Source);
-			const FString Key = Found->Source.ToLower();
-			if (const FString* Existing = NameForSource.Find(Key))
-			{
-				Row.AssetName = *Existing;
-				continue;
-			}
-			FString Name = Uses[Key] >= 3 ? FString::Printf(TEXT("T_%s_%s"), *Token, *Sanitize(FPaths::GetBaseFilename(Found->Source))) : SlotName;
-			// A different file already took this name: give this one its own.
-			for (int32 Suffix = 2; SourceForName.Contains(Name); ++Suffix)
-			{
-				Name = FString::Printf(TEXT("%s_%d"), *SlotName, Suffix);
-			}
-			NameForSource.Add(Key, Name);
-			SourceForName.Add(Name, Key);
-			Row.AssetName = Name;
+		}
+	}
+	for (int32 PlanIndex = 0; PlanIndex < Plans.Num(); ++PlanIndex)
+	{
+		for (FDTHTextureRow& Row : Plans[PlanIndex].Textures)
+		{
+			NameRow(Plans, PlanIndex, Row, Export, &Uses);
 		}
 	}
 	return Plans;
+}
+
+const TArray<FString>& DTHImport::MaterialParents()
+{
+	static const TArray<FString> Parents = { TEXT("Skin"), TEXT("Cloth"), TEXT("Metal"), TEXT("Plastic"), TEXT("Glass"),
+		TEXT("Eye"), TEXT("EyeOcclusion"), TEXT("Tear"), TEXT("Hair"), TEXT("Skip") };
+	return Parents;
+}
+
+void DTHImport::SetSlotParent(TArray<FDTHMaterialPlan>& Plans, int32 PlanIndex, const FString& Parent, const FDTHExport& Export)
+{
+	if (!Plans.IsValidIndex(PlanIndex)) return;
+	FDTHMaterialPlan& Plan = Plans[PlanIndex];
+	TMap<FString, FDTHTextureRow> Kept;
+	for (const FDTHTextureRow& Row : Plan.Textures)
+	{
+		if (!Row.Source.IsEmpty() || Row.bProblem) Kept.Add(Row.Role, Row);
+	}
+	Plan.Parent = Parent;
+	Plan.Textures.Reset();
+	const TMap<FString, FString>& Parameters = RoleParameters(Parent);
+	for (const TCHAR* Role : Roles)
+	{
+		const FString* Parameter = Parameters.Find(Role);
+		if (!Parameter) continue;
+		FDTHTextureRow Row;
+		if (const FDTHTextureRow* Old = Kept.Find(Role)) Row = *Old;
+		Row.Role = Role;
+		Row.Parameter = *Parameter;
+		Row.Kind = RoleKind(Role);
+		Plan.Textures.Add(Row);
+	}
+	for (FDTHTextureRow& Row : Plan.Textures)
+	{
+		NameRow(Plans, PlanIndex, Row, Export, nullptr);
+	}
+}
+
+void DTHImport::SetSlotTexture(TArray<FDTHMaterialPlan>& Plans, int32 PlanIndex, int32 RowIndex, const FString& File, const FDTHExport& Export)
+{
+	if (!Plans.IsValidIndex(PlanIndex) || !Plans[PlanIndex].Textures.IsValidIndex(RowIndex)) return;
+	FDTHTextureRow& Row = Plans[PlanIndex].Textures[RowIndex];
+	Row.Source = File.IsEmpty() ? FString() : FPaths::ConvertRelativePathToFull(File);
+	Row.bProblem = false;
+	Row.Why = File.IsEmpty() ? FString(TEXT("cleared in the wizard")) : FString(TEXT("chosen in the wizard"));
+	Row.bFlipGreen = Row.Kind == EDTHTextureKind::Normal && !Row.Source.IsEmpty() && WantsGreenFlip(Row.Source);
+	Row.AssetName.Reset();
+	NameRow(Plans, PlanIndex, Row, Export, nullptr);
 }

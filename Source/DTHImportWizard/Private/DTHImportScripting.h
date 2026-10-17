@@ -18,6 +18,13 @@ public:
 	static TArray<FString> DescribeExport(const FString& ExportFolder);
 
 	/**
+	 * Opens the wizard tab, loads ExportFolder (if given) as Browse does, and shows Page (Settings, Meshes, Materials,
+	 * Grooms or Import; empty: as loading left it). Returns "Wizard open." or a line starting with "ERROR:".
+	 */
+	UFUNCTION(BlueprintCallable, Category = "DTH Import Wizard")
+	static FString OpenWizard(const FString& ExportFolder = TEXT(""), const FString& Page = TEXT(""));
+
+	/**
 	 * The material merge check on its own: every manifest slot traced back to the Daz surfaces it was made from, and
 	 * each slot that merges surfaces with different textures (unbaked) reported. DazExportFbx empty: found from the
 	 * Character Studio project layout. Problems start with "WARNING:".

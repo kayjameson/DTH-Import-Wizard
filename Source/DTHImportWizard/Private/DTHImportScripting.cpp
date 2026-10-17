@@ -10,6 +10,9 @@
 #include "Misc/Paths.h"
 #include "Steps/DTHImportRun.h"
 #include "Steps/DTHMergeCheck.h"
+#include "DTHImportWizardModule.h"
+#include "Framework/Docking/TabManager.h"
+#include "UI/SDTHImportWizard.h"
 #include "Steps/DTHSkeleton.h"
 
 TArray<FString> UDTHImportScripting::DescribeExport(const FString& ExportFolder)
@@ -43,6 +46,25 @@ TArray<FString> UDTHImportScripting::DescribeExport(const FString& ExportFolder)
 		Lines.Add(FString::Printf(TEXT("Curve file: %s %s"), *Curve.Category, *FPaths::GetCleanFilename(Curve.File)));
 	}
 	return Lines;
+}
+
+FString UDTHImportScripting::OpenWizard(const FString& ExportFolder, const FString& Page)
+{
+	FGlobalTabmanager::Get()->TryInvokeTab(FDTHImportWizardModule::WizardTabName);
+	const TSharedPtr<SDTHImportWizard> Wizard = SDTHImportWizard::Get();
+	if (!Wizard)
+	{
+		return TEXT("ERROR: the wizard tab did not open.");
+	}
+	if (!ExportFolder.IsEmpty())
+	{
+		Wizard->OpenExport(ExportFolder);
+	}
+	if (!Page.IsEmpty() && !Wizard->ShowPage(Page))
+	{
+		return TEXT("ERROR: no page called ") + Page + TEXT(" (Settings, Meshes, Materials, Grooms, Import).");
+	}
+	return TEXT("Wizard open.");
 }
 
 TArray<FString> UDTHImportScripting::CheckMaterialMerges(const FString& ExportFolder, const FString& DazExportFbx)

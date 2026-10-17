@@ -17,6 +17,8 @@ enum class EDTHTextureKind : uint8
 /** One texture parameter of a material instance and the file that fills it. */
 struct FDTHTextureRow
 {
+	/** What the texture is: colour, normal, roughness, specular, scattering, metallic, opacity, ao, height. */
+	FString Role;
 	/** Texture parameter on the parent material ("Base Colour Texture", "Normal Texture"...). */
 	FString Parameter;
 	/** File to import, empty when none could be found (see Why). */
@@ -36,6 +38,8 @@ struct FDTHMaterialPlan
 {
 	/** Material slot name, also the material instance name (MI_<Character><Slot>). */
 	FString Slot;
+	/** Manifest name of the mesh the slot was first found on ("Body", "SC_Fantasy_Armour_Boots_82160"...). */
+	FString Mesh;
 	/** The manifest's material type ("Skin", "Cloth"...). */
 	FString Type;
 	/** DTH parent family ("Skin", "Cloth", "Metal", "Eye"...), "Skip" for none. */
@@ -61,4 +65,19 @@ namespace DTHImport
 
 	/** DTH material instance a parent family copies, relative to the DazToHue content folder ("" for Skip). */
 	FString ParentMaterialPath(const FString& Parent);
+
+	/** The parent families a slot can use, for the wizard's choice ("Skip" last: leave the slot alone). */
+	const TArray<FString>& MaterialParents();
+
+	/**
+	 * Puts Plans[PlanIndex] under another parent family. Its rows become that family's texture parameters; a texture
+	 * already chosen for a role the new family also has stays on it.
+	 */
+	void SetSlotParent(TArray<FDTHMaterialPlan>& Plans, int32 PlanIndex, const FString& Parent, const FDTHExport& Export);
+
+	/**
+	 * Fills (or, with an empty File, clears) one texture parameter of Plans[PlanIndex]. A file another slot already
+	 * uses gets the same texture asset; a new one gets its own name. Kind and green flip follow the role and file.
+	 */
+	void SetSlotTexture(TArray<FDTHMaterialPlan>& Plans, int32 PlanIndex, int32 RowIndex, const FString& File, const FDTHExport& Export);
 }

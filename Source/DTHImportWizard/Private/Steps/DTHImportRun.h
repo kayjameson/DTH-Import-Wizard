@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Steps/DTHImportReport.h"
+#include "Steps/DTHMaterialPlan.h"
 
 class FDTHExport;
 
@@ -16,6 +17,8 @@ struct FDTHImportRequest
 	bool bReimportExistingMeshes = false;
 	/** Import onto this skeleton instead of the one the export targets (empty: the export's). */
 	FString SkeletonOverride;
+	/** The material plan as edited on the wizard's Materials page; unset: the default plan (BuildMaterialPlan). */
+	TOptional<TArray<FDTHMaterialPlan>> MaterialPlans;
 };
 
 struct FDTHMergeCheck;

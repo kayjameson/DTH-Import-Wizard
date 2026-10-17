@@ -94,7 +94,22 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 			MaterialMeshes.Add(&Export.Meshes[MeshIndex]);
 		}
 		ReportMaterialMerges(CheckMaterialMerges(Export, MaterialMeshes), Report);
-		Materials = BuildMaterials(Export, BuildMaterialPlan(Export, MaterialMeshes), Request.DestinationFolder, Report);
+		TArray<FDTHMaterialPlan> Plans;
+		if (Request.MaterialPlans.IsSet())
+		{
+			// The wizard's edited plan, for the slots of the meshes being imported.
+			TSet<FString> Slots;
+			for (const FDTHMeshEntry* Mesh : MaterialMeshes)
+			{
+				for (const FDTHMaterialSlot& Slot : Mesh->Materials) Slots.Add(Slot.Slot);
+			}
+			Plans = Request.MaterialPlans.GetValue().FilterByPredicate([&](const FDTHMaterialPlan& Plan) { return Slots.Contains(Plan.Slot); });
+		}
+		else
+		{
+			Plans = BuildMaterialPlan(Export, MaterialMeshes);
+		}
+		Materials = BuildMaterials(Export, Plans, Request.DestinationFolder, Report);
 	}
 
 	TArray<USkeletalMesh*> Meshes;
