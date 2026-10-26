@@ -135,6 +135,19 @@ What the character wears is one text property, **Wardrobe State**, set in the De
 
 Names are case-insensitive and can be separated by spaces or commas. Unknown names are reported in the Output Log (category `LogDTHWardrobe`), which also logs each state set from Sequencer, scripting or Blueprints.
 
+### From Blueprint
+
+`BP_<Character>` is a child of the C++ **DTH Character** class, so its wardrobe support is inherited: right-click in its graph (or in a child Blueprint, or any Blueprint with a DTH Character reference) and look under **Wardrobe**. The inherited variables show in My Blueprint once **Show Inherited Variables** is on (the gear menu), and under **Wardrobe** in Class Defaults and the Details panel.
+
+| Kind | Members |
+|---|---|
+| Variables | **Wardrobe**, **Wardrobe State**, **Current Outfit**, **Worn Items** |
+| Inventory (pure) | **Get Outfit Names**, **Get Item Names** (Slot, None for all), **Get Items** (Slot), **Get Slots**, **Find Item**, **Is Wearing**, **Get Current Outfit Name**, **Get Worn Items**, **Get Item Component**; on an item or outfit, **Wardrobe Name** |
+| Changes | **Set Outfit**, **Wear Item**, **Remove Item**, **Toggle Item**, **Remove Slot**, **Reset To Outfit**, **Set Wardrobe State** |
+| Events | **On Wardrobe Changed** (Old State, New State, Worn Items), **On Item Worn** (Item), **On Item Removed** (Item) |
+
+The changes edit Wardrobe State. A toggle is just another state, so Blueprint, Sequencer keys and the Details panel can't disagree, and every change fires the events. For example, an inventory UI can list **Get Item Names**, call **Toggle Item** on a click, and refresh from **On Wardrobe Changed**. The lists grow with every add-on import, with nothing to change in the Blueprint.
+
 ### More outfits and hairstyles
 
 A character can have any number of outfits and hairstyles, each exported from its own Houdini file. Import each one into the character's folder with **Add to an existing character** ticked. Its garments and grooms go on the character's body and into its wardrobe, and the outfit is available on the same `BP_<Character>`.

@@ -13,6 +13,7 @@
 #include "PreviewScene.h"
 #include "Steps/DTHImportRun.h"
 #include "Steps/DTHWardrobeBuild.h"
+#include "Tests/DTHWardrobeTestListener.h"
 #include "TrackInstancePropertyBindings.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -75,6 +76,73 @@ namespace DTHWardrobeTest
 	bool HasMessage(const FDTHImportReport& Report, const TCHAR* Text)
 	{
 		return Report.Messages.ContainsByPredicate([Text](const FDTHImportMessage& Message) { return Message.Text.ToString().Contains(Text); });
+	}
+
+	/**
+	 * A transient wardrobe on the imported meshes, shaped to exercise every part of the state grammar: base Choker
+	 * (Neck); outfit One = Dress (Torso), Hat (Head), Heels (Feet); outfit Two = Panties (Underwear); extra AltHat (Head).
+	 */
+	UDTHWardrobe* StandInWardrobe(FAutomationTestBase& Test, const UDTHWardrobe& Imported)
+	{
+		auto Garment = [&](const TCHAR* Token) -> USkeletalMesh*
+		{
+			for (const UDTHWardrobeItem* Item : Imported.AllItems())
+			{
+				if (Item->Mesh && Item->Mesh->GetName().Contains(Token)) return Item->Mesh;
+			}
+			return nullptr;
+		};
+		auto MakeItem = [](const TCHAR* Name, USkeletalMesh* Mesh, const TCHAR* Slot)
+		{
+			UDTHWardrobeItem* Item = NewObject<UDTHWardrobeItem>(GetTransientPackage());
+			Item->ItemName = Name;
+			Item->Mesh = Mesh;
+			Item->Slot = Slot;
+			return Item;
+		};
+		UDTHWardrobeItem* Dress = MakeItem(TEXT("Dress"), Garment(TEXT("Dress")), TEXT("Torso"));
+		UDTHWardrobeItem* Hat = MakeItem(TEXT("Hat"), Garment(TEXT("Hat")), TEXT("Head"));
+		UDTHWardrobeItem* Heels = MakeItem(TEXT("Heels"), Garment(TEXT("Heels")), TEXT("Feet"));
+		UDTHWardrobeItem* Choker = MakeItem(TEXT("Choker"), Garment(TEXT("Choker")), TEXT("Neck"));
+		UDTHWardrobeItem* Panties = MakeItem(TEXT("Panties"), Garment(TEXT("Panties")), TEXT("Underwear"));
+		UDTHWardrobeItem* AltHat = MakeItem(TEXT("AltHat"), Garment(TEXT("Earrings")), TEXT("Head"));
+		for (const UDTHWardrobeItem* Item : { Dress, Hat, Heels, Choker, Panties, AltHat })
+		{
+			if (!Test.TestNotNull(Item->ItemName + TEXT(" mesh found"), Item->Mesh.Get())) return nullptr;
+		}
+		UDTHOutfit* One = NewObject<UDTHOutfit>(GetTransientPackage());
+		One->OutfitName = TEXT("One");
+		One->Items = { Dress, Hat, Heels };
+		UDTHOutfit* Two = NewObject<UDTHOutfit>(GetTransientPackage());
+		Two->OutfitName = TEXT("Two");
+		Two->Items = { Panties };
+		UDTHWardrobe* Wardrobe = NewObject<UDTHWardrobe>(GetTransientPackage());
+		Wardrobe->Body = Imported.Body;
+		Wardrobe->BaseItems = { Choker };
+		Wardrobe->Outfits = { One, Two };
+		Wardrobe->ExtraItems = { AltHat };
+		return Wardrobe;
+	}
+
+	/** The items whose components are visible, sorted, space-separated. */
+	FString Shown(const ADTHCharacter& Actor)
+	{
+		TArray<FString> Names;
+		for (const UDTHWardrobeItem* Item : Actor.Wardrobe->AllItems())
+		{
+			const USceneComponent* Component = Actor.GetItemComponent(Item);
+			if (Component && Component->IsVisible()) Names.Add(Item->ItemName);
+		}
+		Names.Sort();
+		return FString::Join(Names, TEXT(" "));
+	}
+
+	FString Names(const TArray<UDTHWardrobeItem*>& Items)
+	{
+		TArray<FString> Out;
+		for (const UDTHWardrobeItem* Item : Items) Out.Add(Item->ItemName);
+		Out.Sort();
+		return FString::Join(Out, TEXT(" "));
 	}
 
 	void Log(FAutomationTestBase& Test, const FDTHImportReport& Report)
@@ -222,44 +290,9 @@ bool FDTHWardrobeActorTest::RunTest(const FString& Parameters)
 	const UDTHWardrobe* Imported = DTHImport::FindWardrobe(In.Destination);
 	if (!TestNotNull(TEXT("Wardrobe from 1_Base"), Imported)) return false;
 
-	// A transient wardrobe on the imported meshes, shaped to exercise every part of the state grammar.
-	auto Garment = [&](const TCHAR* Token) -> USkeletalMesh*
-	{
-		for (const UDTHWardrobeItem* Item : Imported->AllItems())
-		{
-			if (Item->Mesh && Item->Mesh->GetName().Contains(Token)) return Item->Mesh;
-		}
-		return nullptr;
-	};
-	auto MakeItem = [](const TCHAR* Name, USkeletalMesh* Mesh, const TCHAR* Slot)
-	{
-		UDTHWardrobeItem* Item = NewObject<UDTHWardrobeItem>(GetTransientPackage());
-		Item->ItemName = Name;
-		Item->Mesh = Mesh;
-		Item->Slot = Slot;
-		return Item;
-	};
-	UDTHWardrobeItem* Dress = MakeItem(TEXT("Dress"), Garment(TEXT("Dress")), TEXT("Torso"));
-	UDTHWardrobeItem* Hat = MakeItem(TEXT("Hat"), Garment(TEXT("Hat")), TEXT("Head"));
-	UDTHWardrobeItem* Heels = MakeItem(TEXT("Heels"), Garment(TEXT("Heels")), TEXT("Feet"));
-	UDTHWardrobeItem* Choker = MakeItem(TEXT("Choker"), Garment(TEXT("Choker")), TEXT("Neck"));
-	UDTHWardrobeItem* Panties = MakeItem(TEXT("Panties"), Garment(TEXT("Panties")), TEXT("Underwear"));
-	UDTHWardrobeItem* AltHat = MakeItem(TEXT("AltHat"), Garment(TEXT("Earrings")), TEXT("Head"));
-	for (const UDTHWardrobeItem* Item : { Dress, Hat, Heels, Choker, Panties, AltHat })
-	{
-		if (!TestNotNull(Item->ItemName + TEXT(" mesh found"), Item->Mesh.Get())) return false;
-	}
-	UDTHOutfit* One = NewObject<UDTHOutfit>(GetTransientPackage());
-	One->OutfitName = TEXT("One");
-	One->Items = { Dress, Hat, Heels };
-	UDTHOutfit* Two = NewObject<UDTHOutfit>(GetTransientPackage());
-	Two->OutfitName = TEXT("Two");
-	Two->Items = { Panties };
-	UDTHWardrobe* Wardrobe = NewObject<UDTHWardrobe>(GetTransientPackage());
-	Wardrobe->Body = Imported->Body;
-	Wardrobe->BaseItems = { Choker };
-	Wardrobe->Outfits = { One, Two };
-	Wardrobe->ExtraItems = { AltHat };
+	UDTHWardrobe* Wardrobe = StandInWardrobe(*this, *Imported);
+	if (!Wardrobe) return false;
+	UDTHWardrobeItem* Dress = Wardrobe->FindItem(TEXT("Dress"));
 
 	FPreviewScene Scene(FPreviewScene::ConstructionValues().SetEditor(true));
 	ADTHCharacter* Actor = Scene.GetWorld()->SpawnActorDeferred<ADTHCharacter>(ADTHCharacter::StaticClass(), FTransform::Identity);
@@ -268,17 +301,6 @@ bool FDTHWardrobeActorTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Body mesh from the wardrobe"), Actor->Body->GetSkeletalMeshAsset(), Wardrobe->Body.Get());
 	TestTrue(TEXT("Body passes curves to the garments"), Actor->Body->bPropagateCurvesToFollowers != 0);
 
-	auto Shown = [&]()
-	{
-		TArray<FString> Names;
-		for (const UDTHWardrobeItem* Item : Wardrobe->AllItems())
-		{
-			const USceneComponent* Component = Actor->GetItemComponent(Item);
-			if (Component && Component->IsVisible()) Names.Add(Item->ItemName);
-		}
-		Names.Sort();
-		return FString::Join(Names, TEXT(" "));
-	};
 	TestEqual(TEXT("Every item has a component"), Wardrobe->AllItems().FilterByPredicate([&](const UDTHWardrobeItem* Item) { return Actor->GetItemComponent(Item) != nullptr; }).Num(), 6);
 	const USkeletalMeshComponent* DressComponent = Cast<USkeletalMeshComponent>(Actor->GetItemComponent(Dress));
 	TestTrue(TEXT("Garments follow the body"), DressComponent && DressComponent->LeaderPoseComponent.Get() == Actor->Body);
@@ -297,14 +319,120 @@ bool FDTHWardrobeActorTest::RunTest(const FString& Parameters)
 	for (const FCase& Case : Cases)
 	{
 		Actor->SetWardrobeState(Case.State);
-		TestEqual(FString::Printf(TEXT("State \"%s\""), Case.State), Shown(), FString(Case.Expected));
+		TestEqual(FString::Printf(TEXT("State \"%s\""), Case.State), Shown(*Actor), FString(Case.Expected));
 	}
 
 	// The way Sequencer applies a keyed Wardrobe State: the property's setter, found by name, through ProcessEvent.
 	FTrackInstancePropertyBindings Bindings(TEXT("WardrobeState"), TEXT("WardrobeState"));
 	Bindings.CallFunction<FString>(*Actor, TEXT("One -Hat"));
-	TestEqual(TEXT("Sequencer setter path"), Shown(), FString(TEXT("Choker Dress Heels")));
+	TestEqual(TEXT("Sequencer setter path"), Shown(*Actor), FString(TEXT("Choker Dress Heels")));
 	TestEqual(TEXT("Sequencer setter stores the state"), Actor->WardrobeState, FString(TEXT("One -Hat")));
+
+	Actor->Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDTHWardrobeInterfaceTest, "DTH.Import.Wardrobe.5_BlueprintInterface",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDTHWardrobeInterfaceTest::RunTest(const FString& Parameters)
+{
+	using namespace DTHWardrobeTest;
+	FInputs In;
+	if (!In.Read(*this)) return true;
+	UDTHWardrobe* Imported = DTHImport::FindWardrobe(In.Destination);
+	if (!TestNotNull(TEXT("Wardrobe from 1_Base"), Imported)) return false;
+
+	// What the Blueprint editor offers on the imported BP_<Character>: callable functions and assignable events.
+	const FString Character = Imported->GetName().RightChop(FString(TEXT("DA_Wardrobe_")).Len());
+	const UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *(In.Destination / TEXT("BP_") + Character), nullptr, LOAD_NoWarn);
+	if (!TestNotNull(TEXT("BP_") + Character, Blueprint)) return false;
+	const UClass* Class = Blueprint->GeneratedClass;
+	for (const TCHAR* Name : { TEXT("SetOutfit"), TEXT("WearItem"), TEXT("RemoveItem"), TEXT("ToggleItem"), TEXT("RemoveSlot"),
+		TEXT("ResetToOutfit"), TEXT("SetWardrobeState"), TEXT("GetOutfitNames"), TEXT("GetItemNames"), TEXT("GetItems"), TEXT("GetSlots"),
+		TEXT("FindItem"), TEXT("IsWearing"), TEXT("GetCurrentOutfitName"), TEXT("GetWornItems"), TEXT("GetItemComponent") })
+	{
+		const UFunction* Function = Class->FindFunctionByName(Name);
+		TestTrue(FString::Printf(TEXT("Blueprint can call %s"), Name), Function && Function->HasAnyFunctionFlags(FUNC_BlueprintCallable | FUNC_BlueprintPure));
+	}
+	for (const TCHAR* Name : { TEXT("OnWardrobeChanged"), TEXT("OnItemWorn"), TEXT("OnItemRemoved") })
+	{
+		const FProperty* Event = Class->FindPropertyByName(Name);
+		TestTrue(FString::Printf(TEXT("Blueprint can bind %s"), Name), Event && Event->HasAnyPropertyFlags(CPF_BlueprintAssignable));
+	}
+	for (const TCHAR* Name : { TEXT("Wardrobe"), TEXT("WardrobeState"), TEXT("CurrentOutfit"), TEXT("WornItems") })
+	{
+		const FProperty* Variable = Class->FindPropertyByName(Name);
+		TestTrue(FString::Printf(TEXT("Blueprint can read %s"), Name), Variable && Variable->HasAnyPropertyFlags(CPF_BlueprintVisible));
+	}
+
+	UDTHWardrobe* Wardrobe = StandInWardrobe(*this, *Imported);
+	if (!Wardrobe) return false;
+	FPreviewScene Scene(FPreviewScene::ConstructionValues().SetEditor(true));
+	ADTHCharacter* Actor = Scene.GetWorld()->SpawnActorDeferred<ADTHCharacter>(ADTHCharacter::StaticClass(), FTransform::Identity);
+	Actor->Wardrobe = Wardrobe;
+	Actor->FinishSpawning(FTransform::Identity);
+	UDTHWardrobeTestListener* Listener = NewObject<UDTHWardrobeTestListener>();
+	Actor->OnWardrobeChanged.AddDynamic(Listener, &UDTHWardrobeTestListener::OnChanged);
+	Actor->OnItemWorn.AddDynamic(Listener, &UDTHWardrobeTestListener::OnWorn);
+	Actor->OnItemRemoved.AddDynamic(Listener, &UDTHWardrobeTestListener::OnRemoved);
+
+	// Inventory.
+	TestEqual(TEXT("Outfit names"), FString::Join(Actor->GetOutfitNames(), TEXT(" ")), FString(TEXT("One Two")));
+	TestEqual(TEXT("All item names"), Actor->GetItemNames(NAME_None).Num(), 6);
+	TestEqual(TEXT("Head items"), Names(Actor->GetItems(TEXT("Head"))), FString(TEXT("AltHat Hat")));
+	TestTrue(TEXT("Slots"), Actor->GetSlots().Contains(TEXT("Feet")) && Actor->GetSlots().Contains(TEXT("Underwear")) && Actor->GetSlots().Num() == 5);
+	TestEqual(TEXT("Current outfit"), Actor->GetCurrentOutfitName(), FString(TEXT("One")));
+	TestEqual(TEXT("Current Outfit variable"), Actor->CurrentOutfit.Get(), Wardrobe->Outfits[0].Get());
+	TestTrue(TEXT("Wearing the hat"), Actor->IsWearing(TEXT("hat")));
+	TestEqual(TEXT("Worn Items variable"), Actor->WornItems.Num(), 4);
+
+	struct FStep
+	{
+		const TCHAR* What;
+		TFunction<bool()> Do;
+		bool bReturns;
+		const TCHAR* State;
+		const TCHAR* Shown;
+		const TCHAR* Worn;
+		const TCHAR* Removed;
+	};
+	const FStep Steps[] = {
+		{ TEXT("Toggle Item Hat (off)"), [&] { return Actor->ToggleItem(TEXT("Hat")); }, false, TEXT("One -Hat"), TEXT("Choker Dress Heels"), TEXT(""), TEXT("Hat") },
+		{ TEXT("Toggle Item Hat (on)"), [&] { return Actor->ToggleItem(TEXT("Hat")); }, true, TEXT("One"), TEXT("Choker Dress Hat Heels"), TEXT("Hat"), TEXT("") },
+		{ TEXT("Wear Item AltHat"), [&] { return Actor->WearItem(TEXT("AltHat")); }, true, TEXT("One +AltHat"), TEXT("AltHat Choker Dress Heels"), TEXT("AltHat"), TEXT("Hat") },
+		{ TEXT("Wear Item Hat"), [&] { return Actor->WearItem(TEXT("Hat")); }, true, TEXT("One +Hat"), TEXT("Choker Dress Hat Heels"), TEXT("Hat"), TEXT("AltHat") },
+		{ TEXT("Remove Slot Feet"), [&] { Actor->RemoveSlot(TEXT("Feet")); return true; }, true, TEXT("One -slot:Feet +Hat"), TEXT("Choker Dress Hat"), TEXT(""), TEXT("Heels") },
+		{ TEXT("Wear Item Heels"), [&] { return Actor->WearItem(TEXT("Heels")); }, true, TEXT("One -slot:Feet +Hat +Heels"), TEXT("Choker Dress Hat Heels"), TEXT("Heels"), TEXT("") },
+		{ TEXT("Remove Item Choker"), [&] { return Actor->RemoveItem(TEXT("Choker")); }, true, TEXT("One -Choker -slot:Feet +Hat +Heels"), TEXT("Dress Hat Heels"), TEXT(""), TEXT("Choker") },
+		{ TEXT("Reset To Outfit"), [&] { Actor->ResetToOutfit(); return true; }, true, TEXT("One"), TEXT("Choker Dress Hat Heels"), TEXT("Choker"), TEXT("") },
+		{ TEXT("Set Outfit Two"), [&] { return Actor->SetOutfit(TEXT("two")); }, true, TEXT("two"), TEXT("Choker Panties"), TEXT("Panties"), TEXT("Dress Hat Heels") },
+	};
+	for (const FStep& Step : Steps)
+	{
+		Listener->Reset();
+		TestEqual(FString(Step.What) + TEXT(": returns"), Step.Do(), Step.bReturns);
+		TestEqual(FString(Step.What) + TEXT(": state"), Actor->WardrobeState, FString(Step.State));
+		TestEqual(FString(Step.What) + TEXT(": shown"), Shown(*Actor), FString(Step.Shown));
+		TestEqual(FString(Step.What) + TEXT(": On Wardrobe Changed once"), Listener->Changes.Num(), 1);
+		TestEqual(FString(Step.What) + TEXT(": its worn items"), Listener->LastWornCount, Actor->WornItems.Num());
+		TestEqual(FString(Step.What) + TEXT(": On Item Worn"), Names(Listener->Worn), FString(Step.Worn));
+		TestEqual(FString(Step.What) + TEXT(": On Item Removed"), Names(Listener->Removed), FString(Step.Removed));
+	}
+	TestEqual(TEXT("Current outfit after Set Outfit"), Actor->GetCurrentOutfitName(), FString(TEXT("Two")));
+
+	// Unknown names change nothing and fire nothing; the same state again fires nothing.
+	Listener->Reset();
+	TestFalse(TEXT("Set Outfit Bogus"), Actor->SetOutfit(TEXT("Bogus")));
+	TestFalse(TEXT("Wear Item Bogus"), Actor->WearItem(TEXT("Bogus")));
+	Actor->SetWardrobeState(TEXT("two"));
+	TestEqual(TEXT("No events for no change"), Listener->Changes.Num(), 0);
+	TestEqual(TEXT("State kept"), Actor->WardrobeState, FString(TEXT("two")));
+
+	// Sequencer's path fires the same events.
+	FTrackInstancePropertyBindings Bindings(TEXT("WardrobeState"), TEXT("WardrobeState"));
+	Bindings.CallFunction<FString>(*Actor, TEXT("One"));
+	TestEqual(TEXT("Sequencer change fires On Wardrobe Changed"), Listener->Changes.Num(), 1);
 
 	Actor->Destroy();
 	return true;

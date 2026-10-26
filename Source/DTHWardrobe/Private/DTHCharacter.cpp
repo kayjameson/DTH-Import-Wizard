@@ -49,6 +49,76 @@ namespace
 		}
 		return Parsed;
 	}
+
+	FString Compose(const FParsedState& State)
+	{
+		TArray<FString> Tokens;
+		if (!State.Outfit.IsEmpty()) Tokens.Add(State.Outfit);
+		for (const FString& Name : State.Remove) Tokens.Add(TEXT("-") + Name);
+		for (const FName& Slot : State.RemoveSlots) Tokens.Add(TEXT("-slot:") + Slot.ToString());
+		for (const FString& Name : State.Add) Tokens.Add(TEXT("+") + Name);
+		return FString::Join(Tokens, TEXT(" "));
+	}
+
+	bool RemoveName(TArray<FString>& Names, const UDTHWardrobeItem* Item)
+	{
+		return Names.RemoveAll([Item](const FString& Name) { return Item->IsNamed(Name); }) > 0;
+	}
+
+	/**
+	 * What State wears: the base items and the outfit's, minus removals, plus additions (each replacing the worn items
+	 * of its slot). Current is the outfit a state without an outfit name keeps. Warns about unknown names when Owner is set.
+	 */
+	TArray<UDTHWardrobeItem*> Evaluate(const UDTHWardrobe& Wardrobe, UDTHOutfit* Current, const FParsedState& State, UDTHOutfit*& OutOutfit,
+		const AActor* Owner)
+	{
+		OutOutfit = Current;
+		if (!State.Outfit.IsEmpty())
+		{
+			OutOutfit = Wardrobe.FindOutfit(State.Outfit);
+			if (!OutOutfit && Owner)
+			{
+				UE_LOG(LogDTHWardrobe, Warning, TEXT("%s: no outfit named %s; wearing the base items only."), *Owner->GetName(), *State.Outfit);
+			}
+		}
+		else if (!OutOutfit && Wardrobe.Outfits.Num() > 0)
+		{
+			OutOutfit = Wardrobe.Outfits[0];
+		}
+
+		TArray<UDTHWardrobeItem*> Wearing;
+		for (UDTHWardrobeItem* Item : Wardrobe.BaseItems)
+		{
+			if (Item) Wearing.AddUnique(Item);
+		}
+		if (OutOutfit)
+		{
+			for (UDTHWardrobeItem* Item : OutOutfit->Items)
+			{
+				if (Item) Wearing.AddUnique(Item);
+			}
+		}
+		Wearing.RemoveAll([&State](const UDTHWardrobeItem* Item)
+		{
+			return State.RemoveSlots.Contains(Item->Slot)
+				|| State.Remove.ContainsByPredicate([Item](const FString& Name) { return Item->IsNamed(Name); });
+		});
+		for (const FString& Name : State.Add)
+		{
+			UDTHWardrobeItem* Item = Wardrobe.FindItem(Name);
+			if (!Item)
+			{
+				if (Owner) UE_LOG(LogDTHWardrobe, Warning, TEXT("%s: no wardrobe item named %s."), *Owner->GetName(), *Name);
+				continue;
+			}
+			if (!Item->Slot.IsNone())
+			{
+				Wearing.RemoveAll([Item](const UDTHWardrobeItem* Other) { return Other != Item && Other->Slot == Item->Slot; });
+			}
+			Wearing.AddUnique(Item);
+		}
+		return Wearing;
+	}
 }
 
 ADTHCharacter::ADTHCharacter()
@@ -67,10 +137,67 @@ void ADTHCharacter::SetWardrobeState(const FString& NewState)
 	ApplyState(true);
 }
 
+TArray<FString> ADTHCharacter::GetOutfitNames() const
+{
+	TArray<FString> Names;
+	if (!Wardrobe) return Names;
+	for (const UDTHOutfit* Outfit : Wardrobe->Outfits)
+	{
+		if (Outfit) Names.Add(Outfit->WardrobeName());
+	}
+	return Names;
+}
+
+TArray<FString> ADTHCharacter::GetItemNames(FName Slot) const
+{
+	TArray<FString> Names;
+	for (const UDTHWardrobeItem* Item : GetItems(Slot))
+	{
+		Names.Add(Item->WardrobeName());
+	}
+	return Names;
+}
+
+TArray<UDTHWardrobeItem*> ADTHCharacter::GetItems(FName Slot) const
+{
+	TArray<UDTHWardrobeItem*> Items = Wardrobe ? Wardrobe->AllItems() : TArray<UDTHWardrobeItem*>();
+	if (!Slot.IsNone())
+	{
+		Items.RemoveAll([Slot](const UDTHWardrobeItem* Item) { return Item->Slot != Slot; });
+	}
+	return Items;
+}
+
+TArray<FName> ADTHCharacter::GetSlots() const
+{
+	TArray<FName> Slots;
+	for (const UDTHWardrobeItem* Item : GetItems(NAME_None))
+	{
+		if (!Item->Slot.IsNone()) Slots.AddUnique(Item->Slot);
+	}
+	return Slots;
+}
+
+UDTHWardrobeItem* ADTHCharacter::FindItem(const FString& Item) const
+{
+	return Wardrobe ? Wardrobe->FindItem(Item) : nullptr;
+}
+
+bool ADTHCharacter::IsWearing(const FString& Item) const
+{
+	const UDTHWardrobeItem* Found = FindItem(Item);
+	return Found && WornItems.Contains(Found);
+}
+
+FString ADTHCharacter::GetCurrentOutfitName() const
+{
+	return CurrentOutfit ? CurrentOutfit->WardrobeName() : FString();
+}
+
 TArray<UDTHWardrobeItem*> ADTHCharacter::GetWornItems() const
 {
 	TArray<UDTHWardrobeItem*> Items;
-	for (UDTHWardrobeItem* Item : Worn)
+	for (UDTHWardrobeItem* Item : WornItems)
 	{
 		Items.Add(Item);
 	}
@@ -83,6 +210,106 @@ USceneComponent* ADTHCharacter::GetItemComponent(const UDTHWardrobeItem* Item) c
 	return Found ? Found->Get() : nullptr;
 }
 
+bool ADTHCharacter::SetOutfit(const FString& Outfit)
+{
+	EnsureReady();
+	if (!Wardrobe || !Wardrobe->FindOutfit(Outfit))
+	{
+		UE_LOG(LogDTHWardrobe, Warning, TEXT("%s: Set Outfit: no outfit named %s."), *GetName(), *Outfit);
+		return false;
+	}
+	SetWardrobeState(Outfit);
+	return true;
+}
+
+bool ADTHCharacter::WearItem(const FString& Item)
+{
+	EnsureReady();
+	UDTHWardrobeItem* Found = FindItem(Item);
+	if (!Found)
+	{
+		UE_LOG(LogDTHWardrobe, Warning, TEXT("%s: Wear Item: no item named %s."), *GetName(), *Item);
+		return false;
+	}
+	FParsedState State = Parse(WardrobeState);
+	if (State.Outfit.IsEmpty()) State.Outfit = GetCurrentOutfitName();
+	RemoveName(State.Remove, Found);
+	RemoveName(State.Add, Found);
+	// Without its removal it may be worn already (an outfit item); else it's added, replacing its slot.
+	UDTHOutfit* Outfit = nullptr;
+	if (!Evaluate(*Wardrobe, CurrentOutfit, State, Outfit, nullptr).Contains(Found))
+	{
+		// It replaces its slot, so earlier additions to that slot no longer do anything.
+		if (!Found->Slot.IsNone())
+		{
+			State.Add.RemoveAll([this, Found](const FString& Name)
+			{
+				const UDTHWardrobeItem* Other = Wardrobe->FindItem(Name);
+				return Other && Other->Slot == Found->Slot;
+			});
+		}
+		State.Add.Add(Found->WardrobeName());
+	}
+	SetWardrobeState(Compose(State));
+	return true;
+}
+
+bool ADTHCharacter::RemoveItem(const FString& Item)
+{
+	EnsureReady();
+	UDTHWardrobeItem* Found = FindItem(Item);
+	if (!Found)
+	{
+		UE_LOG(LogDTHWardrobe, Warning, TEXT("%s: Remove Item: no item named %s."), *GetName(), *Item);
+		return false;
+	}
+	FParsedState State = Parse(WardrobeState);
+	if (State.Outfit.IsEmpty()) State.Outfit = GetCurrentOutfitName();
+	RemoveName(State.Add, Found);
+	UDTHOutfit* Outfit = nullptr;
+	if (Evaluate(*Wardrobe, CurrentOutfit, State, Outfit, nullptr).Contains(Found))
+	{
+		State.Remove.Add(Found->WardrobeName());
+	}
+	SetWardrobeState(Compose(State));
+	return true;
+}
+
+bool ADTHCharacter::ToggleItem(const FString& Item)
+{
+	EnsureReady();
+	if (IsWearing(Item))
+	{
+		RemoveItem(Item);
+	}
+	else
+	{
+		WearItem(Item);
+	}
+	return IsWearing(Item);
+}
+
+void ADTHCharacter::RemoveSlot(FName Slot)
+{
+	EnsureReady();
+	if (!Wardrobe || Slot.IsNone()) return;
+	FParsedState State = Parse(WardrobeState);
+	if (State.Outfit.IsEmpty()) State.Outfit = GetCurrentOutfitName();
+	State.Add.RemoveAll([this, Slot](const FString& Name)
+	{
+		const UDTHWardrobeItem* Item = Wardrobe->FindItem(Name);
+		return Item && Item->Slot == Slot;
+	});
+	State.RemoveSlots.AddUnique(Slot);
+	SetWardrobeState(Compose(State));
+}
+
+void ADTHCharacter::ResetToOutfit()
+{
+	EnsureReady();
+	SetWardrobeState(GetCurrentOutfitName());
+}
+
 void ADTHCharacter::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
@@ -93,6 +320,7 @@ void ADTHCharacter::OnConstruction(const FTransform& Transform)
 	ItemComponents.Reset();
 	AppliedState.Reset();
 	CurrentOutfit = nullptr;
+	WornItems.Reset();
 	// Made here, they are construction components: a rerun (any property change) destroys and remakes them.
 	EnsureComponents(EComponentCreationMethod::UserConstructionScript);
 	ApplyState(false);
@@ -100,11 +328,18 @@ void ADTHCharacter::OnConstruction(const FTransform& Transform)
 
 void ADTHCharacter::BeginPlay()
 {
+	// Before Super, which runs the Blueprint's Begin Play: that may already call the Wardrobe functions.
+	EnsureReady();
 	Super::BeginPlay();
-	// A level-loaded actor keeps its construction components but not this actor's transient bookkeeping.
-	if (ItemComponents.IsEmpty())
+}
+
+void ADTHCharacter::EnsureReady()
+{
+	// A level-loaded or play-in-editor copy keeps its construction components but not this actor's transient state.
+	if (Wardrobe && ItemComponents.IsEmpty())
 	{
 		AppliedState.Reset();
+		WornItems.Reset();
 		EnsureComponents(EComponentCreationMethod::Instance);
 		ApplyState(false);
 	}
@@ -176,60 +411,18 @@ USceneComponent* ADTHCharacter::MakeComponent(UDTHWardrobeItem* Item, EComponent
 	return Component;
 }
 
-void ADTHCharacter::ApplyState(bool bLog)
+void ADTHCharacter::ApplyState(bool bNotify)
 {
-	if (!Wardrobe || (AppliedState == WardrobeState && !Worn.IsEmpty())) return;
-	const FParsedState Parsed = Parse(WardrobeState);
+	if (!Wardrobe || (AppliedState == WardrobeState && !WornItems.IsEmpty())) return;
+	UDTHOutfit* Outfit = nullptr;
+	const TArray<UDTHWardrobeItem*> Wearing = Evaluate(*Wardrobe, CurrentOutfit, Parse(WardrobeState), Outfit, this);
+	CurrentOutfit = Outfit;
 
-	if (!Parsed.Outfit.IsEmpty())
-	{
-		CurrentOutfit = Wardrobe->FindOutfit(Parsed.Outfit);
-		if (!CurrentOutfit)
-		{
-			UE_LOG(LogDTHWardrobe, Warning, TEXT("%s: no outfit named %s; wearing the base items only."), *GetName(), *Parsed.Outfit);
-		}
-	}
-	else if (!CurrentOutfit && Wardrobe->Outfits.Num() > 0)
-	{
-		CurrentOutfit = Wardrobe->Outfits[0];
-	}
-
-	TArray<UDTHWardrobeItem*> Wearing;
-	for (UDTHWardrobeItem* Item : Wardrobe->BaseItems)
-	{
-		if (Item) Wearing.AddUnique(Item);
-	}
-	if (CurrentOutfit)
-	{
-		for (UDTHWardrobeItem* Item : CurrentOutfit->Items)
-		{
-			if (Item) Wearing.AddUnique(Item);
-		}
-	}
-	for (const FString& Name : Parsed.Add)
-	{
-		UDTHWardrobeItem* Item = Wardrobe->FindItem(Name);
-		if (!Item)
-		{
-			UE_LOG(LogDTHWardrobe, Warning, TEXT("%s: no wardrobe item named %s."), *GetName(), *Name);
-			continue;
-		}
-		if (!Item->Slot.IsNone())
-		{
-			Wearing.RemoveAll([Item](const UDTHWardrobeItem* Other) { return Other != Item && Other->Slot == Item->Slot; });
-		}
-		Wearing.AddUnique(Item);
-	}
-	Wearing.RemoveAll([&Parsed](const UDTHWardrobeItem* Item)
-	{
-		return Parsed.RemoveSlots.Contains(Item->Slot)
-			|| Parsed.Remove.ContainsByPredicate([Item](const FString& Name) { return Item->IsNamed(Name); });
-	});
-
-	Worn.Reset();
+	const TArray<TObjectPtr<UDTHWardrobeItem>> Before = WornItems;
+	WornItems.Reset();
 	for (UDTHWardrobeItem* Item : Wearing)
 	{
-		Worn.Add(Item);
+		WornItems.Add(Item);
 	}
 	for (const TPair<TObjectPtr<UDTHWardrobeItem>, TObjectPtr<USceneComponent>>& Entry : ItemComponents)
 	{
@@ -238,10 +431,19 @@ void ADTHCharacter::ApplyState(bool bLog)
 			Entry.Value->SetVisibility(Wearing.Contains(Entry.Key.Get()));
 		}
 	}
-	if (bLog && AppliedState != WardrobeState)
-	{
-		UE_LOG(LogDTHWardrobe, Log, TEXT("%s: wardrobe state \"%s\": outfit %s, %d items worn."), *GetName(), *WardrobeState,
-			CurrentOutfit ? *CurrentOutfit->WardrobeName() : TEXT("none"), Worn.Num());
-	}
+
+	const FString OldState = AppliedState;
 	AppliedState = WardrobeState;
+	if (!bNotify || OldState == WardrobeState) return;
+	UE_LOG(LogDTHWardrobe, Log, TEXT("%s: wardrobe state \"%s\": outfit %s, %d items worn."), *GetName(), *WardrobeState,
+		CurrentOutfit ? *CurrentOutfit->WardrobeName() : TEXT("none"), WornItems.Num());
+	for (UDTHWardrobeItem* Item : Before)
+	{
+		if (Item && !Wearing.Contains(Item)) OnItemRemoved.Broadcast(Item);
+	}
+	for (UDTHWardrobeItem* Item : Wearing)
+	{
+		if (!Before.Contains(Item)) OnItemWorn.Broadcast(Item);
+	}
+	OnWardrobeChanged.Broadcast(OldState, WardrobeState, Wearing);
 }

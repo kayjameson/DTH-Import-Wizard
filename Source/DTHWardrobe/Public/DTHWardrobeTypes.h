@@ -44,6 +44,8 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Item")
 	FString SourceExport;
 
+	/** The name wardrobe states and the character's Wardrobe functions use: Item Name, else the asset name. */
+	UFUNCTION(BlueprintPure, Category = "Wardrobe")
 	FString WardrobeName() const { return ItemName.IsEmpty() ? GetName() : ItemName; }
 	/** True for Other equal to the item's name or asset name, ignoring case. */
 	bool IsNamed(const FString& Other) const;
@@ -63,6 +65,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Outfit")
 	TArray<TObjectPtr<UDTHWardrobeItem>> Items;
 
+	/** The name wardrobe states and Set Outfit use: Outfit Name, else the asset name. */
+	UFUNCTION(BlueprintPure, Category = "Wardrobe")
 	FString WardrobeName() const { return OutfitName.IsEmpty() ? GetName() : OutfitName; }
 	bool IsNamed(const FString& Other) const;
 };
