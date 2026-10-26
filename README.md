@@ -60,10 +60,10 @@ Choose the export folder with the folder button at the top (the folder that hold
    - a summary of the export (character, figure, target skeleton, skinning method);
    - the destination content folder;
    - the meshes to import (manifest meshes are ticked; FBX files not listed in the manifest are shown unticked);
-   - **Reimport existing meshes:** replace meshes that already exist in the destination instead of reusing them;
+   - **Reimport existing meshes and grooms:** replace meshes and grooms that already exist in the destination instead of reusing them;
    - **Check Material Merges:** runs the [material merge check](#material-merge-check) on its own.
 3. **Materials:** the material each slot will get, editable. See [Materials and textures](#materials-and-textures).
-4. **Grooms:** not implemented yet.
+4. **Grooms:** every `ABC_<Groom Name>.abc` the DazToHue Groom Export node wrote to the root of the export folder, each with an import tick box, its binding's interpolation points and the body slot used as its Matching Section. See [Grooms](#grooms).
 5. **Import:** runs the import and lists every step's result, warning and error, followed by any step that has to be done by hand.
 
 ## What an import does
@@ -92,7 +92,18 @@ In order:
    - DazToHue's control shape library;
    - its hierarchy checked against the mesh's rest pose;
    - set as the mesh's default animating rig.
-10. **Save** of everything the import created or changed.
+10. **Grooms:** the DazToHue Groom guide's Unreal setup for each ticked groom. See [Grooms](#grooms).
+11. **Save** of everything the import created or changed.
+
+## Grooms
+
+Export each groom from Houdini with the DazToHue Groom Export node, with its **Export Directory** set to the character's export folder (the one holding `DTH_<Character>.dth`). The wizard picks up every `ABC_<Groom Name>.abc` there and follows the Groom guide's "Unreal Engine - Basic setup":
+
+- **Import** at default options into the character's folder, as `ABC_<Groom Name>`.
+- **Binding** on the body mesh (target and source), named `ABC_<Groom Name>_<Body>_<Body>_Binding` as the editor's Create Binding names it. The Matching Section is the element number of the chosen body slot, by default the slot whose name ends in `Head`. Interpolation points default to 25 for grooms named like brows or lashes and 100 for everything else, as the guide suggests.
+- **Material:** a copy of DazToHue's `MI_DTH_Hair` per groom, `Materials/MI_<Character><Groom Name>`, in the groom's material slot. It shows the strand colours set in Houdini; change its parameters to override them.
+
+Adding a Groom component for each groom to your character blueprint (Groom Asset and Binding Asset) is listed as a manual step, since the wizard doesn't make a character blueprint. The plugin turns on the engine's **Groom** and **Alembic Groom Importer** plugins.
 
 ## Materials and textures
 
@@ -102,7 +113,8 @@ Each material slot gets a material instance named after the slot, in `<Character
 
 The wizard builds a plan for every slot from the export:
 
-- **Parent family:** the manifest's material type (Skin, Cloth, Metal, Plastic, Glass, Eye, EyeOcclusion, Tear, Hair). DazToHue types most clothing as Skin, so a Skin slot that isn't named after a body part (head, body, arms, legs, nails, mouth, face, torso, genitalia...) is set to Cloth.
+- **Parent family:** the manifest's material type (Skin, Cloth, ClothMasked, Metal, Plastic, Glass, Eye, EyeOcclusion, Tear, Hair). DazToHue types most clothing as Skin, so a Skin slot that isn't named after a body part (head, body, arms, legs, nails, mouth, face, torso, genitalia...) is set to Cloth.
+- **Cloth with an opacity map** (lace, sheer panels, cut-outs) is set to ClothMasked. DazToHue's Cloth material is opaque and has no opacity input, so the opacity map would otherwise be dropped. ClothMasked is a per-character copy of DazToHue's masked cloth material (`M_<Character>ClothMasked`). The opacity map goes on its `Mask Texture`, with `Enable Mask` and `Use Mask Texture` on. The copy dithers the mask: each pixel shows with a probability equal to its opacity, so sheer fabric that Iray renders partly see-through stays see-through under temporal anti-aliasing (TSR or TAA), while fully opaque and fully transparent areas are unchanged.
 - **Textures:** the files the manifest lists for each channel, on the right parameter for the parent. Families name their parameters differently: for example, Cloth uses `Normal Texture` where Skin uses `Base Normal Texture`. Each texture's matching "Use ..." switch is turned on.
 - **Extra maps:** maps the manifest doesn't list, such as SSS, specular, ambient occlusion and height, are picked up from the same texture set by file name. A file that differs from a listed one in a single name token (`..._d_1001` → `..._sss_1001`) is taken as that set's other map.
 - **Import settings by use:**
@@ -186,7 +198,7 @@ for line in unreal.DTHImportScripting.import_character(export, "/Game/Characters
 
 - Genesis 9 only.
 - Win64 editor only.
-- Grooms are not imported yet.
+- The groom occlusion texture the Groom Export node can bake is not used.
 - The material plan's edits aren't saved between sessions; reopening an export starts from the defaults.
 - During an import, progress is shown per step, not per texture or file.
 

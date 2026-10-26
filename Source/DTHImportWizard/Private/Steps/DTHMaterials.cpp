@@ -8,6 +8,12 @@
 #include "Export/DTHExport.h"
 #include "Factories/MaterialInstanceConstantFactoryNew.h"
 #include "MaterialEditingLibrary.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialExpressionAdd.h"
+#include "Materials/MaterialExpressionMaterialFunctionCall.h"
+#include "Materials/MaterialExpressionMultiply.h"
+#include "Materials/MaterialExpressionSubtract.h"
+#include "Materials/MaterialFunctionInterface.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
@@ -75,6 +81,49 @@ namespace
 		return NAME_None;
 	}
 
+	/** DTH's masked cloth material, which the ClothMasked family's per-character material copies. */
+	const TCHAR* const MaskedClothMaterial = TEXT("Common/Materials/Cloth/M_DTH_ClothMasked");
+
+	/**
+	 * Makes Material's opacity mask dithered: a pixel is kept with probability equal to its opacity, so partial
+	 * opacity (sheer fabric, which Iray renders see-through) shows through under temporal AA instead of being cut at
+	 * the clip value. 0 and 1 are unchanged, so cut-outs (lace) stay exact.
+	 *
+	 * Engine DitherTemporalAA with Alpha Threshold 0.5 gives D = (k + n) / 6, k in 0..4 per pixel and frame, n tiling
+	 * noise in [0, 1): U = 1.2 D is uniform in [0, 1). Mask' = Mask + Clip - U passes the clip test exactly when
+	 * U < Mask.
+	 */
+	bool AddDitheredOpacity(UMaterial* Material)
+	{
+		FScalarMaterialInput& Input = Material->GetEditorOnlyData()->OpacityMask;
+		UMaterialExpression* Source = Input.Expression;
+		UMaterialFunctionInterface* Dither = LoadObject<UMaterialFunctionInterface>(nullptr,
+			TEXT("/Engine/Functions/Engine_MaterialFunctions02/Utility/DitherTemporalAA.DitherTemporalAA"));
+		if (!Source || !Dither) return false;
+		const int32 SourceOutput = Input.OutputIndex;
+		const int32 X = Source->MaterialExpressionEditorX + 300, Y = Source->MaterialExpressionEditorY + 300;
+
+		auto* Call = Cast<UMaterialExpressionMaterialFunctionCall>(
+			UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionMaterialFunctionCall::StaticClass(), X, Y));
+		Call->SetMaterialFunction(Dither);
+		auto* Scale = Cast<UMaterialExpressionMultiply>(
+			UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionMultiply::StaticClass(), X + 250, Y));
+		Scale->ConstB = 1.2f;
+		Scale->A.Connect(0, Call);
+		auto* Less = Cast<UMaterialExpressionSubtract>(
+			UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionSubtract::StaticClass(), X + 450, Y - 100));
+		Less->A.Connect(SourceOutput, Source);
+		Less->B.Connect(0, Scale);
+		auto* Clip = Cast<UMaterialExpressionAdd>(
+			UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionAdd::StaticClass(), X + 650, Y - 100));
+		Clip->A.Connect(0, Less);
+		Clip->ConstB = Material->OpacityMaskClipValue;
+		Input.Connect(0, Clip);
+
+		UMaterialEditingLibrary::RecompileMaterial(Material);
+		return true;
+	}
+
 	class FMaterialBuilder
 	{
 	public:
@@ -113,6 +162,16 @@ namespace
 
 			UMaterialInstanceConstant* Master = CopyOf(StockPath, FString::Printf(TEXT("MI_%s%sMaster"), *AssetSafe(Export.Character), *Plan.Parent));
 			if (!Master) return nullptr;
+			if (Plan.Parent == TEXT("ClothMasked"))
+			{
+				UMaterial* Dithered = DitheredMaskedCloth();
+				if (!Dithered) return nullptr;
+				if (Master->Parent != Dithered)
+				{
+					UMaterialEditingLibrary::SetMaterialInstanceParent(Master, Dithered);
+					Master->MarkPackageDirty();
+				}
+			}
 
 			const FString Path = MaterialFolder / SlotName;
 			UMaterialInstanceConstant* Instance = LoadObject<UMaterialInstanceConstant>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
@@ -152,6 +211,11 @@ namespace
 				{
 					UMaterialEditingLibrary::SetMaterialInstanceStaticSwitchParameterValue(Instance, Switch, true, EMaterialParameterAssociation::GlobalParameter, false);
 				}
+				// The masked cloth's opacity also needs its master switch (MF_DTH_ClothMask: off gives a constant 1).
+				if (Row.Role == TEXT("opacity") && Switches.Contains(FName(TEXT("Enable Mask"))))
+				{
+					UMaterialEditingLibrary::SetMaterialInstanceStaticSwitchParameterValue(Instance, TEXT("Enable Mask"), true, EMaterialParameterAssociation::GlobalParameter, false);
+				}
 				++Set;
 			}
 			UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
@@ -185,6 +249,29 @@ namespace
 			}
 			Copies.Add(CopyName, Copy);
 			return Copy;
+		}
+
+		/** M_<Character>ClothMasked: a copy of DTH's masked cloth material with dithered opacity, made once per character. */
+		UMaterial* DitheredMaskedCloth()
+		{
+			if (DitheredMaterial) return DitheredMaterial;
+			const FString CopyName = FString::Printf(TEXT("M_%sClothMasked"), *AssetSafe(Export.Character));
+			DitheredMaterial = LoadObject<UMaterial>(nullptr, *(MaterialFolder / CopyName), nullptr, LOAD_NoWarn | LOAD_Quiet);
+			if (DitheredMaterial) return DitheredMaterial;
+			const FString FullStock = GetDefault<UDTHImportSettings>()->DazToHueAsset(MaskedClothMaterial);
+			UMaterial* Stock = LoadObject<UMaterial>(nullptr, *FullStock, nullptr, LOAD_NoWarn);
+			DitheredMaterial = Stock ? Cast<UMaterial>(AssetTools.DuplicateAsset(CopyName, MaterialFolder, Stock)) : nullptr;
+			if (!DitheredMaterial)
+			{
+				Report.Error(FText::Format(LOCTEXT("MaskedCopyFailed", "Could not copy DTH material {0} to {1}."), FText::FromString(FullStock), FText::FromString(CopyName)));
+				return nullptr;
+			}
+			if (!AddDitheredOpacity(DitheredMaterial))
+			{
+				Report.Warning(FText::Format(LOCTEXT("DitherFailed", "{0}: could not add dithered opacity; partial opacity is cut at the clip value."), FText::FromString(CopyName)));
+			}
+			DitheredMaterial->MarkPackageDirty();
+			return DitheredMaterial;
 		}
 
 		/** The plan's texture: the existing asset (settings re-applied), else imported under the plan's name. */
@@ -237,6 +324,7 @@ namespace
 		FDTHImportReport& Report;
 		IAssetTools& AssetTools;
 		TMap<FString, UMaterialInstanceConstant*> Copies;
+		UMaterial* DitheredMaterial = nullptr;
 		TMap<FString, UTexture2D*> Textures;
 		int32 Built = 0, Imported = 0, Reused = 0;
 	};

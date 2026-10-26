@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Steps/DTHGrooms.h"
 #include "Steps/DTHImportReport.h"
 #include "Steps/DTHMaterialPlan.h"
 
@@ -13,12 +14,14 @@ struct FDTHImportRequest
 	FString DestinationFolder;
 	/** Indexes into Export->Meshes. */
 	TArray<int32> MeshIndices;
-	/** Re-import meshes that already exist in the destination; otherwise they're reused as they are. */
+	/** Re-import meshes and grooms that already exist in the destination; otherwise they're reused as they are. */
 	bool bReimportExistingMeshes = false;
 	/** Import onto this skeleton instead of the one the export targets (empty: the export's). */
 	FString SkeletonOverride;
 	/** The material plan as edited on the wizard's Materials page; unset: the default plan (BuildMaterialPlan). */
 	TOptional<TArray<FDTHMaterialPlan>> MaterialPlans;
+	/** The grooms as set up on the wizard's Grooms page; unset: the default plan (BuildGroomPlans). */
+	TOptional<TArray<FDTHGroomPlan>> GroomPlans;
 };
 
 struct FDTHMergeCheck;

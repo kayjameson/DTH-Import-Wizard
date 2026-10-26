@@ -45,6 +45,11 @@ TArray<FString> UDTHImportScripting::DescribeExport(const FString& ExportFolder)
 	{
 		Lines.Add(FString::Printf(TEXT("Curve file: %s %s"), *Curve.Category, *FPaths::GetCleanFilename(Curve.File)));
 	}
+	for (const FDTHGroomPlan& Groom : DTHImport::BuildGroomPlans(*Export))
+	{
+		Lines.Add(FString::Printf(TEXT("Groom: %s %s, %d interpolation points, matching slot %s"), *Groom.Name,
+			*FPaths::GetCleanFilename(Groom.File), Groom.InterpolationPoints, Groom.MatchingSlot.IsEmpty() ? TEXT("(none)") : *Groom.MatchingSlot));
+	}
 	return Lines;
 }
 

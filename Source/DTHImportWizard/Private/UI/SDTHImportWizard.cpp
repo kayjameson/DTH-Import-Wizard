@@ -23,6 +23,7 @@
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSegmentedControl.h"
+#include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -95,11 +96,7 @@ void SDTHImportWizard::Construct(const FArguments& InArgs)
 				+ SWidgetSwitcher::Slot()[MakeSettingsPage()]
 				+ SWidgetSwitcher::Slot()[MakeMeshesPage()]
 				+ SWidgetSwitcher::Slot()[MakeMaterialsPage()]
-				+ SWidgetSwitcher::Slot()
-				[
-					MakePlaceholderPage(LOCTEXT("GroomsTitle", "Grooms"),
-						LOCTEXT("GroomsBody", "Groom alembics from the DazToHue Groom Export node: import, binding, hair material and occlusion."))
-				]
+				+ SWidgetSwitcher::Slot()[MakeGroomsPage()]
 				+ SWidgetSwitcher::Slot()[MakeImportPage()]
 			]
 
@@ -265,9 +262,9 @@ TSharedRef<SWidget> SDTHImportWizard::MakeMeshesPage()
 						SNew(SCheckBox)
 						.IsChecked_Lambda([this]() { return bReimportExistingMeshes ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
 						.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { bReimportExistingMeshes = State == ECheckBoxState::Checked; })
-						.ToolTipText(LOCTEXT("ReimportTip", "Replace meshes that already exist in the destination. Otherwise they are reused and only the setup steps run."))
+						.ToolTipText(LOCTEXT("ReimportTip", "Replace meshes and grooms that already exist in the destination. Otherwise they are reused and only the setup steps run."))
 						[
-							SNew(STextBlock).Text(LOCTEXT("Reimport", "Reimport existing meshes"))
+							SNew(STextBlock).Text(LOCTEXT("Reimport", "Reimport existing meshes and grooms"))
 						]
 					])
 			]
@@ -611,27 +608,154 @@ FReply SDTHImportWizard::OnBrowseTexture(int32 PlanIndex, int32 RowIndex)
 	return FReply::Handled();
 }
 
-TSharedRef<SWidget> SDTHImportWizard::MakePlaceholderPage(const FText& Title, const FText& Body)
+TSharedRef<SWidget> SDTHImportWizard::MakeGroomsPage()
 {
 	return SNew(SBorder)
 		.BorderImage(FAppStyle::GetBrush("Brushes.Recessed"))
-		.Padding(12.f)
+		.Padding(8.f)
 		[
-			SNew(SScrollBox)
+			SNew(SVerticalBox)
 
-			+ SScrollBox::Slot().Padding(0.f, 0.f, 0.f, 8.f)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
 			[
-				SNew(STextBlock)
-				.Font(FAppStyle::GetFontStyle("HeadingExtraSmall"))
-				.Text(Title)
+				MakeSection(LOCTEXT("GroomsSection", "Grooms"),
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock)
+						.AutoWrapText(true)
+						.Text(LOCTEXT("GroomsHelp", "Groom alembics from the DazToHue Groom Export node (ABC_<Groom Name>.abc in the export folder), set up as the Groom guide does: imported at default options, bound to the body mesh with the chosen slot as Matching Section, and given a copy of MI_DTH_Hair. Use 100 interpolation points for head hair and around 25 for brows and lashes. Adding the Groom components to your character blueprint is left to you."))
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+					[
+						SNew(STextBlock)
+						.Text_Lambda([this]()
+						{
+							if (!Export.IsValid())
+							{
+								return LOCTEXT("GroomsNoExport", "Open an export to see its grooms.");
+							}
+							if (GroomPlans.Num() == 0)
+							{
+								return FText::Format(LOCTEXT("GroomsNone", "No ABC_*.abc grooms in {0}."), FText::FromString(Export->Folder));
+							}
+							const int32 Ticked = GroomPlans.FilterByPredicate([](const FDTHGroomPlan& Plan) { return Plan.bImport; }).Num();
+							return FText::Format(LOCTEXT("GroomsSummary", "{0} grooms, {1} ticked for import"), GroomPlans.Num(), Ticked);
+						})
+					])
 			]
 
-			+ SScrollBox::Slot()
+			+ SVerticalBox::Slot().FillHeight(1.f)
 			[
-				SNew(STextBlock)
-				.AutoWrapText(true)
-				.ColorAndOpacity(FStyleColors::Foreground)
-				.Text(Body)
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				[
+					SAssignNew(GroomsBox, SVerticalBox)
+				]
+			]
+		];
+}
+
+void SDTHImportWizard::RefreshGroomsPage()
+{
+	BodySlotOptions.Reset();
+	if (const FDTHMeshEntry* Body = Export.IsValid() ? Export->FindBody() : nullptr)
+	{
+		for (const FDTHMaterialSlot& Slot : Body->Materials)
+		{
+			BodySlotOptions.Add(MakeShared<FString>(Slot.Slot));
+		}
+	}
+	if (GroomsBox)
+	{
+		GroomsBox->ClearChildren();
+		for (int32 Index = 0; Index < GroomPlans.Num(); ++Index)
+		{
+			GroomsBox->AddSlot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)[MakeGroomRow(Index)];
+		}
+	}
+}
+
+TSharedRef<SWidget> SDTHImportWizard::MakeGroomRow(int32 PlanIndex)
+{
+	const FDTHGroomPlan& Plan = GroomPlans[PlanIndex];
+	TSharedPtr<FString> Current;
+	for (const TSharedPtr<FString>& Option : BodySlotOptions)
+	{
+		if (*Option == Plan.MatchingSlot) Current = Option;
+	}
+	return SNew(SBorder)
+		.BorderImage(FAppStyle::GetBrush("Brushes.Panel"))
+		.Padding(6.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+			[
+				SNew(SCheckBox)
+				.ToolTipText(LOCTEXT("GroomImportTip", "Import this groom"))
+				.IsChecked_Lambda([this, PlanIndex]() { return GroomPlans.IsValidIndex(PlanIndex) && GroomPlans[PlanIndex].bImport ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+				.OnCheckStateChanged_Lambda([this, PlanIndex](ECheckBoxState State)
+				{
+					if (GroomPlans.IsValidIndex(PlanIndex)) GroomPlans[PlanIndex].bImport = State == ECheckBoxState::Checked;
+				})
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(STextBlock).Font(FAppStyle::GetFontStyle("BoldFont")).Text(FText::FromString(Plan.Name))
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(STextBlock)
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+					.Text(FText::FromString(FPaths::GetCleanFilename(Plan.File)))
+					.ToolTipText(FText::FromString(Plan.File))
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.f, 0.f, 6.f, 0.f)
+			[
+				SNew(STextBlock).Text(LOCTEXT("GroomPoints", "Interpolation Points"))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(60.f)
+				[
+					SNew(SSpinBox<int32>)
+					.MinValue(1)
+					.MaxValue(100)
+					.ToolTipText(LOCTEXT("GroomPointsTip", "The binding's Num Interpolation Points: 100 for head hair, around 25 for brows and lashes (Groom guide)."))
+					.Value_Lambda([this, PlanIndex]() { return GroomPlans.IsValidIndex(PlanIndex) ? GroomPlans[PlanIndex].InterpolationPoints : 100; })
+					.OnValueChanged_Lambda([this, PlanIndex](int32 Value)
+					{
+						if (GroomPlans.IsValidIndex(PlanIndex)) GroomPlans[PlanIndex].InterpolationPoints = Value;
+					})
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.f, 0.f, 6.f, 0.f)
+			[
+				SNew(STextBlock).Text(LOCTEXT("GroomSlot", "Matching Section"))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SComboBox<TSharedPtr<FString>>)
+				.ToolTipText(LOCTEXT("GroomSlotTip", "The body material slot the groom grows from; its element number is the binding's Matching Section (the head's, in the Groom guide)."))
+				.OptionsSource(&BodySlotOptions)
+				.InitiallySelectedItem(Current)
+				.OnGenerateWidget_Lambda([](TSharedPtr<FString> Option) { return SNew(STextBlock).Text(FText::FromString(*Option)); })
+				.OnSelectionChanged_Lambda([this, PlanIndex](TSharedPtr<FString> Option, ESelectInfo::Type)
+				{
+					if (Option && GroomPlans.IsValidIndex(PlanIndex)) GroomPlans[PlanIndex].MatchingSlot = *Option;
+				})
+				[
+					SNew(STextBlock)
+					.Text_Lambda([this, PlanIndex]()
+					{
+						const FString Slot = GroomPlans.IsValidIndex(PlanIndex) ? GroomPlans[PlanIndex].MatchingSlot : FString();
+						return Slot.IsEmpty() ? LOCTEXT("GroomNoSlot", "(choose a slot)") : FText::FromString(Slot);
+					})
+				]
 			]
 		];
 }
@@ -767,6 +891,8 @@ void SDTHImportWizard::LoadExport(const FString& Folder)
 	}
 	MergeCheckText = FText::GetEmpty();
 	ResetMaterialPlan();
+	GroomPlans = Export.IsValid() ? DTHImport::BuildGroomPlans(*Export) : TArray<FDTHGroomPlan>();
+	RefreshGroomsPage();
 }
 
 bool SDTHImportWizard::CanImport() const
@@ -807,6 +933,7 @@ FReply SDTHImportWizard::OnImport()
 	Request.DestinationFolder = DestinationFolder;
 	Request.bReimportExistingMeshes = bReimportExistingMeshes;
 	Request.MaterialPlans = MaterialPlans;
+	Request.GroomPlans = GroomPlans;
 	for (const TSharedPtr<FMeshRow>& Row : MeshRows)
 	{
 		if (Row->bImport)

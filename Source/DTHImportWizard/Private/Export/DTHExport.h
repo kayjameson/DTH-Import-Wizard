@@ -38,6 +38,14 @@ struct FDTHCurveFile
 	FString Category;
 };
 
+/** A groom alembic from the DazToHue Groom Export node, ABC_<Groom Name>.abc at the root of the export folder. */
+struct FDTHGroomEntry
+{
+	/** The Groom Name typed on the export node ("BaseHair"). */
+	FString Name;
+	FString File;
+};
+
 /**
  * A DazToHue export folder, read from its DTH_<Character>.dth manifest.
  * Paths in the manifest are absolute and go stale when an export is moved, so every
@@ -61,6 +69,10 @@ public:
 	TArray<FDTHMeshEntry> Meshes;
 	TArray<FDTHPoseAssetEntry> PoseAssets;
 	TArray<FDTHCurveFile> CurveFiles;
+	TArray<FDTHGroomEntry> Grooms;
+
+	/** The manifest's body mesh, or null. */
+	const FDTHMeshEntry* FindBody() const;
 
 	bool TargetsMannequin() const;
 	bool UsesDualQuaternionSkinning() const;
@@ -70,4 +82,5 @@ private:
 	FString Resolve(const FString& ManifestPath, const TCHAR* SubFolder) const;
 	bool Parse(const FString& Json, FString& OutError);
 	void AddUnlistedMeshes();
+	void FindGrooms();
 };

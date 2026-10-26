@@ -62,6 +62,11 @@ namespace
 			{ TEXT("colour"), TEXT("Base Colour Texture") }, { TEXT("normal"), TEXT("Normal Texture") },
 			{ TEXT("roughness"), TEXT("Roughness Texture") }, { TEXT("specular"), TEXT("Specular Texture") },
 			{ TEXT("metallic"), TEXT("Metallic Texture") } };
+		// DTH's masked cloth (MF_DTH_ClothMask): opacity is the red channel of "Mask Texture".
+		static const TMap<FString, FString> ClothMasked = {
+			{ TEXT("colour"), TEXT("Base Colour Texture") }, { TEXT("normal"), TEXT("Normal Texture") },
+			{ TEXT("roughness"), TEXT("Roughness Texture") }, { TEXT("specular"), TEXT("Specular Texture") },
+			{ TEXT("metallic"), TEXT("Metallic Texture") }, { TEXT("opacity"), TEXT("Mask Texture") } };
 		static const TMap<FString, FString> Base = {
 			{ TEXT("colour"), TEXT("Base Colour Texture") }, { TEXT("normal"), TEXT("Base Normal Texture") },
 			{ TEXT("roughness"), TEXT("Base Roughness Texture") }, { TEXT("specular"), TEXT("Base Specular Texture") },
@@ -70,6 +75,7 @@ namespace
 		static const TMap<FString, FString> None;
 		if (Parent == TEXT("Skin")) return Skin;
 		if (Parent == TEXT("Cloth")) return Cloth;
+		if (Parent == TEXT("ClothMasked")) return ClothMasked;
 		if (Parent == TEXT("Metal") || Parent == TEXT("Plastic") || Parent == TEXT("Glass")) return Base;
 		if (Parent == TEXT("Hair")) return Hair;
 		return None;
@@ -359,6 +365,7 @@ FString DTHImport::ParentMaterialPath(const FString& Parent)
 	static const TMap<FString, FString> Paths = {
 		{ TEXT("Skin"), TEXT("Common/Materials/Skin/MI_DTH_Skin") },
 		{ TEXT("Cloth"), TEXT("Common/Materials/Cloth/MI_DTH_Cloth") },
+		{ TEXT("ClothMasked"), TEXT("Common/Materials/Cloth/MI_DTH_ClothMasked") },
 		{ TEXT("Metal"), TEXT("Common/Materials/Metal/MI_DTH_Metal") },
 		{ TEXT("Plastic"), TEXT("Common/Materials/Plastic/MI_DTH_Plastic") },
 		{ TEXT("Glass"), TEXT("Common/Materials/Glass/MI_DTH_Glass") },
@@ -388,7 +395,15 @@ TArray<FDTHMaterialPlan> DTHImport::BuildMaterialPlan(const FDTHExport& Export, 
 			{
 				Parent = TEXT("Cloth");
 			}
-			Guesses.Add({ &Material, Mesh->Name.IsEmpty() ? FPaths::GetBaseFilename(Mesh->File) : Mesh->Name, Parent, Planner.Textures(Material) });
+			TMap<FString, FPlanner::FFound> Found = Planner.Textures(Material);
+			// DTH's Cloth parent is opaque and has no opacity parameter, so cloth with an opacity map (lace, sheer
+			// panels) goes under the masked cloth instead.
+			const FPlanner::FFound* Opacity = Found.Find(TEXT("opacity"));
+			if (Parent == TEXT("Cloth") && Opacity && !Opacity->Source.IsEmpty())
+			{
+				Parent = TEXT("ClothMasked");
+			}
+			Guesses.Add({ &Material, Mesh->Name.IsEmpty() ? FPaths::GetBaseFilename(Mesh->File) : Mesh->Name, Parent, MoveTemp(Found) });
 		}
 	}
 
@@ -442,7 +457,7 @@ TArray<FDTHMaterialPlan> DTHImport::BuildMaterialPlan(const FDTHExport& Export, 
 
 const TArray<FString>& DTHImport::MaterialParents()
 {
-	static const TArray<FString> Parents = { TEXT("Skin"), TEXT("Cloth"), TEXT("Metal"), TEXT("Plastic"), TEXT("Glass"),
+	static const TArray<FString> Parents = { TEXT("Skin"), TEXT("Cloth"), TEXT("ClothMasked"), TEXT("Metal"), TEXT("Plastic"), TEXT("Glass"),
 		TEXT("Eye"), TEXT("EyeOcclusion"), TEXT("Tear"), TEXT("Hair"), TEXT("Skip") };
 	return Parents;
 }

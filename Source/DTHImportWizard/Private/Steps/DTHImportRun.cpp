@@ -79,8 +79,8 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 		return Report;
 	}
 
-	// Steps: materials, one per mesh, then blueprint, setup, retargeting, pose assets, control rig, save.
-	FScopedSlowTask Task(Request.MeshIndices.Num() + 7, LOCTEXT("Task", "Importing DazToHue character"));
+	// Steps: materials, one per mesh, then blueprint, setup, retargeting, pose assets, control rig, grooms, save.
+	FScopedSlowTask Task(Request.MeshIndices.Num() + 8, LOCTEXT("Task", "Importing DazToHue character"));
 	Task.MakeDialog(true);
 
 	// Before the meshes, so their slots find the materials by name (DTH importer: process_fbx_materials ahead of each
@@ -113,6 +113,7 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 	}
 
 	TArray<USkeletalMesh*> Meshes;
+	USkeletalMesh* Body = nullptr;
 	for (const int32 MeshIndex : Request.MeshIndices)
 	{
 		if (Task.ShouldCancel())
@@ -130,6 +131,7 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 			{
 				Report.Info(FText::Format(LOCTEXT("MeshReused", "{0} exists; reused (tick Reimport to replace it)."), FText::FromString(AssetPath)));
 				Meshes.Add(Existing);
+				Body = Entry.bInManifest && Entry.IsBody() ? Existing : Body;
 				continue;
 			}
 		}
@@ -139,6 +141,7 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 			Report.Info(FText::Format(LOCTEXT("MeshImported", "Imported {0}: {1} material slots, {2} morph targets."),
 				FText::FromString(Mesh->GetPathName()), Mesh->GetMaterials().Num(), Mesh->GetMorphTargets().Num()));
 			Meshes.Add(Mesh);
+			Body = Entry.bInManifest && Entry.IsBody() ? Mesh : Body;
 		}
 		else
 		{
@@ -187,6 +190,10 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 	{
 		Report.Error(LOCTEXT("NoMeshes", "No meshes were imported, so there is nothing to build the control rig on."));
 	}
+
+	Task.EnterProgressFrame(1.f, LOCTEXT("TaskGrooms", "Grooms"));
+	BuildGrooms(Export, Request.GroomPlans.IsSet() ? Request.GroomPlans.GetValue() : BuildGroomPlans(Export), Body,
+		Request.DestinationFolder, Request.bReimportExistingMeshes, Report);
 
 	Task.EnterProgressFrame(1.f, LOCTEXT("TaskSave", "Saving"));
 	TArray<UPackage*> Packages;

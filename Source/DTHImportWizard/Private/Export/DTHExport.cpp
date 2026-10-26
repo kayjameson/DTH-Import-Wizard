@@ -74,6 +74,7 @@ TSharedPtr<FDTHExport> FDTHExport::Load(const FString& InFolder, FString& OutErr
 		return nullptr;
 	}
 	Export->AddUnlistedMeshes();
+	Export->FindGrooms();
 	return Export;
 }
 
@@ -191,6 +192,28 @@ void FDTHExport::AddUnlistedMeshes()
 			Mesh.File = Full;
 		}
 	}
+}
+
+void FDTHExport::FindGrooms()
+{
+	// The Groom Export node writes <Export Directory>/ABC_<Groom Name>.abc (Groom Guide, "Export options explained":
+	// the prefix is added on export); grooms are expected at the root of the character's export folder (user, 2026-10-24).
+	TArray<FString> Files;
+	IFileManager::Get().FindFiles(Files, *(Folder / TEXT("*.abc")), true, false);
+	Files.Sort();
+	for (const FString& File : Files)
+	{
+		FString Name = FPaths::GetBaseFilename(File);
+		if (Name.RemoveFromStart(TEXT("ABC_"), ESearchCase::IgnoreCase) && !Name.IsEmpty())
+		{
+			Grooms.Add({ Name, Folder / File });
+		}
+	}
+}
+
+const FDTHMeshEntry* FDTHExport::FindBody() const
+{
+	return Meshes.FindByPredicate([](const FDTHMeshEntry& Mesh) { return Mesh.bInManifest && Mesh.IsBody(); });
 }
 
 bool FDTHExport::TargetsMannequin() const

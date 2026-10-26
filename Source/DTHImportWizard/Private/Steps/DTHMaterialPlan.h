@@ -53,7 +53,7 @@ namespace DTHImport
 	 * The default material plan for every manifest slot of Meshes (each slot once, manifest order). Ported from the
 	 * old Python wizard's material planner:
 	 * - parent from the manifest type, except clothing DTH types as Skin, which becomes Cloth unless the slot is a
-	 *   body part;
+	 *   body part; Cloth with an opacity map becomes ClothMasked (DTH's Cloth is opaque and has no opacity input);
 	 * - each manifest texture under the parent's own parameter name (DTH's Cloth master has "Normal Texture" where
 	 *   Skin has "Base Normal Texture"), metallic included;
 	 * - maps the manifest doesn't list (SSS, specular, AO, height) found next to the listed files by name;

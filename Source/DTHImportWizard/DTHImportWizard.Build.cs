@@ -39,6 +39,7 @@ public class DTHImportWizard : ModuleRules
 			"ControlRigEditor",
 			"RigVM",
 			"RigVMDeveloper",
+			"HairStrandsCore",
 		});
 	}
 }

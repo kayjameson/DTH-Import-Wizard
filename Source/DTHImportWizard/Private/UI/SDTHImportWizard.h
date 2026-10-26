@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Steps/DTHGrooms.h"
 #include "Steps/DTHImportReport.h"
 #include "Steps/DTHMaterialPlan.h"
 #include "Widgets/SCompoundWidget.h"
@@ -53,11 +54,14 @@ private:
 	TSharedRef<SWidget> MakeStepBar();
 	TSharedRef<SWidget> MakeSettingsPage();
 	TSharedRef<SWidget> MakeMeshesPage();
-	TSharedRef<SWidget> MakePlaceholderPage(const FText& Title, const FText& Body);
 	TSharedRef<SWidget> MakeMaterialsPage();
 	/** Rebuilds the Materials page's slot list from MaterialPlans (on the next tick, safe from inside its own widgets). */
 	void RefreshMaterialsPage();
 	TSharedRef<SWidget> MakeMaterialSlot(int32 PlanIndex);
+	TSharedRef<SWidget> MakeGroomsPage();
+	/** Rebuilds the Grooms page's rows from GroomPlans. */
+	void RefreshGroomsPage();
+	TSharedRef<SWidget> MakeGroomRow(int32 PlanIndex);
 	TSharedRef<SWidget> MakeImportPage();
 	TSharedRef<SWidget> MakeActionBar();
 	TSharedRef<SWidget> MakeSection(const FText& Title, const TSharedRef<SWidget>& Content);
@@ -98,6 +102,12 @@ private:
 	TSharedPtr<SVerticalBox> MaterialsBox;
 	TArray<TSharedPtr<FString>> ParentOptions;
 	bool bMaterialsRefreshPending = false;
+
+	/** The grooms the Grooms page edits and the import uses (every ABC_*.abc in the export). */
+	TArray<FDTHGroomPlan> GroomPlans;
+	TSharedPtr<SVerticalBox> GroomsBox;
+	/** The body mesh's material slots, for each groom's Matching Section. */
+	TArray<TSharedPtr<FString>> BodySlotOptions;
 
 	static TWeakPtr<SDTHImportWizard> Instance;
 

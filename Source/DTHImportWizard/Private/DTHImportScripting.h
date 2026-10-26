@@ -34,7 +34,7 @@ public:
 
 	/**
 	 * Runs the whole import as the wizard's Import button does: the export's manifest meshes (plus unlisted FBX
-	 * files if bIncludeUnlisted), post-process blueprint, deformer, curves, retargeting and pose assets, into
+	 * files if bIncludeUnlisted), post-process blueprint, deformer, curves, retargeting, pose assets and grooms, into
 	 * DestinationFolder (e.g. /Game/Characters/Vi). Existing meshes are reused unless bReimportExistingMeshes.
 	 * SkeletonOverride imports onto another skeleton (empty: the one the export targets).
 	 * Returns the run's messages; errors start with "ERROR:", warnings with "WARNING:".
