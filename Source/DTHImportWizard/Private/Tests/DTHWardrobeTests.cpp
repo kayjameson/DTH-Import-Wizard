@@ -2,6 +2,9 @@
 #include "DTHCharacter.h"
 #include "DTHWardrobeTypes.h"
 #include "Engine/Blueprint.h"
+#include "Engine/SCS_Node.h"
+#include "Engine/SimpleConstructionScript.h"
+#include "Kismet2/BlueprintEditorUtils.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "Export/DTHExport.h"
@@ -145,6 +148,17 @@ namespace DTHWardrobeTest
 		return FString::Join(Out, TEXT(" "));
 	}
 
+	/** The components of Blueprint's own that were tagged for a wardrobe item. */
+	int32 ItemComponentsIn(const UBlueprint& Blueprint)
+	{
+		int32 Count = 0;
+		for (const USCS_Node* Node : Blueprint.SimpleConstructionScript->GetAllNodes())
+		{
+			Count += ADTHCharacter::TaggedItem(Cast<USceneComponent>(Node->ComponentTemplate)) ? 1 : 0;
+		}
+		return Count;
+	}
+
 	void Log(FAutomationTestBase& Test, const FDTHImportReport& Report)
 	{
 		for (const FDTHImportMessage& Message : Report.Messages)
@@ -198,6 +212,9 @@ bool FDTHWardrobeBaseTest::RunTest(const FString& Parameters)
 	const ADTHCharacter* Defaults = Blueprint->GeneratedClass ? Blueprint->GeneratedClass->GetDefaultObject<ADTHCharacter>() : nullptr;
 	if (!TestNotNull(TEXT("Blueprint is a DTH Character"), Defaults)) return false;
 	TestEqual(TEXT("Blueprint wardrobe"), Defaults->Wardrobe.Get(), Wardrobe);
+	TestFalse(TEXT("Blueprint is a full Blueprint (opens with its viewport)"), FBlueprintEditorUtils::IsDataOnlyBlueprint(Blueprint));
+	TestEqual(TEXT("Blueprint has a component per wardrobe item"), ItemComponentsIn(*Blueprint), Wardrobe->AllItems().Num());
+	TestEqual(TEXT("Blueprint's Body has the body mesh"), Defaults->Body->GetSkeletalMeshAsset(), Wardrobe->Body.Get());
 
 	// What a placed BP_<Character> gets: the wardrobe and the export's outfit, worn.
 	FPreviewScene Scene(FPreviewScene::ConstructionValues().SetEditor(true));
@@ -206,6 +223,17 @@ bool FDTHWardrobeBaseTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Placed blueprint's wardrobe"), Placed->Wardrobe.Get(), Wardrobe);
 	TestEqual(TEXT("Placed blueprint's state"), Placed->WardrobeState, Outfit);
 	TestEqual(TEXT("Placed blueprint wears the outfit and base items"), Placed->GetWornItems().Num(), Main->Items.Num() + Wardrobe->BaseItems.Num());
+	for (const UDTHWardrobeItem* Item : Wardrobe->AllItems())
+	{
+		const USceneComponent* Component = Placed->GetItemComponent(Item);
+		TestTrue(Item->GetName() + TEXT(" is shown by the Blueprint's component"), Component && Component->CreationMethod == EComponentCreationMethod::SimpleConstructionScript);
+		TestTrue(Item->GetName() + TEXT(" is under Body"), Component && Component->GetAttachParent() == Placed->Body);
+		TestEqual(Item->GetName() + TEXT(" visible when worn"), Component && Component->IsVisible(), Placed->GetWornItems().Contains(Item));
+		if (const USkeletalMeshComponent* Garment = Cast<USkeletalMeshComponent>(Component))
+		{
+			TestTrue(Item->GetName() + TEXT(" follows the body"), Garment->LeaderPoseComponent.Get() == Placed->Body);
+		}
+	}
 	Placed->Destroy();
 	return true;
 }
@@ -222,6 +250,10 @@ bool FDTHWardrobeAddOnTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("Wardrobe from 1_Base"), Wardrobe)) return false;
 	USkeletalMesh* BodyBefore = Wardrobe->Body;
 	const int32 ItemsBefore = Wardrobe->AllItems().Num();
+	const FString Character = Wardrobe->GetName().RightChop(FString(TEXT("DA_Wardrobe_")).Len());
+	const UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *(In.Destination / TEXT("BP_") + Character), nullptr, LOAD_NoWarn);
+	if (!TestNotNull(TEXT("BP_") + Character, Blueprint)) return false;
+	const int32 ComponentsBefore = ItemComponentsIn(*Blueprint);
 
 	// The same export again as an add-on, one garment only: its body matches by construction.
 	FDTHImportRequest Req = Request(*this, In.ExportFolder, In.Destination, TEXT("Hat"), true);
@@ -241,6 +273,7 @@ bool FDTHWardrobeAddOnTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("Outfit HatOnly"), HatOnly)) return false;
 	TestEqual(TEXT("HatOnly items"), HatOnly->Items.Num(), 1);
 	TestEqual(TEXT("No new items (the hat's item is reused)"), Wardrobe->AllItems().Num(), ItemsBefore);
+	TestEqual(TEXT("No new Blueprint components (the hat's is reused)"), ItemComponentsIn(*Blueprint), ComponentsBefore);
 	return true;
 }
 

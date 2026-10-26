@@ -118,7 +118,7 @@ Every import fills the character's wardrobe in `<Character>/Wardrobe` and makes 
 - **Base items:** brows, lashes and vellus are part of the face and are worn with every outfit.
 - **Outfits** (`DA_Outfit_<Character>_<Name>`): the export's garments and head hair become the outfit named on the Meshes & Rig page. The name defaults to what the garment names share, e.g. `Witch` for `Witch_Dress`, `Witch_Hat`... The first import also makes **Nude** (head hair only).
 - **The wardrobe** (`DA_Wardrobe_<Character>`): the body, the base items, the outfits, and **extra items**. An export with grooms but no garments (a new hairstyle) adds them as extra items instead of making an outfit.
-- **`BP_<Character>`:** a **DTH Character** on the wardrobe, wearing the first import's outfit. It has the body (animate this component) and, created once, every garment (following the body's pose and its joint correctives) and every groom (bound to the body). Changing outfits only shows and hides them.
+- **`BP_<Character>`:** a **DTH Character** on the wardrobe, wearing the first import's outfit. Its Components panel has the **Body** (animate this component; its mesh is set) and, under it, a `Wardrobe_<Item>` component for every garment (following the body's pose and its joint correctives) and every groom (bound to the body). It opens in the full Blueprint editor, with the character in the viewport. Changing outfits only shows and hides these components. You can adjust them like any component, e.g. set a groom's Physics Asset; a later import keeps your changes and only adds components for new items. Items you add to the wardrobe by hand are created by the actor at construction instead.
 
 ### Wardrobe State
 

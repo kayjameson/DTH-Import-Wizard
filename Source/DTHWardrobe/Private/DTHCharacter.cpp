@@ -345,17 +345,35 @@ void ADTHCharacter::EnsureReady()
 	}
 }
 
+void ADTHCharacter::TagItemComponent(USceneComponent* Component, const UDTHWardrobeItem* Item)
+{
+	Component->ComponentTags.RemoveAll([](const FName& Tag) { return Tag == WardrobeTag || Tag.ToString().StartsWith(TEXT("/")); });
+	Component->ComponentTags.Insert({ WardrobeTag, FName(*Item->GetPathName()) }, 0);
+}
+
+UDTHWardrobeItem* ADTHCharacter::TaggedItem(const USceneComponent* Component)
+{
+	if (!Component || Component->ComponentTags.Num() < 2 || Component->ComponentTags[0] != WardrobeTag) return nullptr;
+	const FString Path = Component->ComponentTags[1].ToString();
+	UDTHWardrobeItem* Item = FindObject<UDTHWardrobeItem>(nullptr, *Path);
+	return Item ? Item : LoadObject<UDTHWardrobeItem>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
+}
+
 void ADTHCharacter::EnsureComponents(EComponentCreationMethod CreationMethod)
 {
 	if (!Wardrobe) return;
+	// The Blueprint's own components (the import adds one per item) and earlier made ones.
 	TInlineComponentArray<USceneComponent*> Existing(this);
 	for (USceneComponent* Component : Existing)
 	{
-		if (Component && Component->ComponentTags.Num() >= 2 && Component->ComponentTags[0] == WardrobeTag)
+		UDTHWardrobeItem* Item = TaggedItem(Component);
+		if (!Item || ItemComponents.Contains(Item)) continue;
+		ItemComponents.Add(Item, Component);
+		if (USkeletalMeshComponent* Garment = Cast<USkeletalMeshComponent>(Component))
 		{
-			if (UDTHWardrobeItem* Item = FindObject<UDTHWardrobeItem>(nullptr, *Component->ComponentTags[1].ToString()))
+			if (Garment->LeaderPoseComponent.Get() != Body)
 			{
-				ItemComponents.Add(Item, Component);
+				Garment->SetLeaderPoseComponent(Body, true, false);
 			}
 		}
 	}
@@ -400,7 +418,7 @@ USceneComponent* ADTHCharacter::MakeComponent(UDTHWardrobeItem* Item, EComponent
 		UE_LOG(LogDTHWardrobe, Warning, TEXT("%s: wardrobe item %s has neither a mesh nor a groom."), *GetName(), *Item->GetName());
 		return nullptr;
 	}
-	Component->ComponentTags = { WardrobeTag, FName(*Item->GetPathName()) };
+	TagItemComponent(Component, Item);
 	Component->CreationMethod = CreationMethod;
 	Component->SetVisibility(false);
 	Component->RegisterComponent();

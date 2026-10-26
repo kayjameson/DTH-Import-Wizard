@@ -5,10 +5,15 @@
 #include "DTHImportLog.h"
 #include "DTHWardrobeTypes.h"
 #include "Engine/Blueprint.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Engine/BlueprintGeneratedClass.h"
+#include "Engine/SCS_Node.h"
+#include "Engine/SimpleConstructionScript.h"
 #include "Engine/SkeletalMesh.h"
 #include "Export/DTHExport.h"
 #include "GroomAsset.h"
+#include "GroomComponent.h"
+#include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Steps/DTHImportReport.h"
 #include "UObject/Package.h"
@@ -159,47 +164,129 @@ namespace
 		int32 Created = 0;
 	};
 
-	/** BP_<Character> in Folder: a DTH Character on Wardrobe, wearing StartState. Kept as it is if it exists. */
+	/** A component variable name for Item that the Blueprint doesn't use yet: Wardrobe_<Name>, _2, _3... */
+	FName ComponentName(const USimpleConstructionScript& Construction, const UDTHWardrobeItem& Item)
+	{
+		FString Base;
+		for (const TCHAR Char : Item.WardrobeName())
+		{
+			Base.AppendChar(FChar::IsAlnum(Char) || Char == TEXT('_') ? Char : TEXT('_'));
+		}
+		Base = TEXT("Wardrobe_") + Base;
+		FString Name = Base;
+		for (int32 Suffix = 2; Construction.FindSCSNode(FName(*Name)); ++Suffix)
+		{
+			Name = FString::Printf(TEXT("%s_%d"), *Base, Suffix);
+		}
+		return FName(*Name);
+	}
+
+	/**
+	 * A component under Body for every wardrobe item the Blueprint doesn't have one for yet: a skeletal mesh for a
+	 * garment, a groom (with its binding) for a groom, hidden until worn and tagged for the actor to find. They make
+	 * the Blueprint a full one (it opens with its viewport) and list what the character can wear in its Components
+	 * panel, where each can be adjusted. Returns how many were added.
+	 */
+	int32 AddItemComponents(UBlueprint* Blueprint, const UDTHWardrobe* Wardrobe)
+	{
+		USimpleConstructionScript* Construction = Blueprint->SimpleConstructionScript;
+		ADTHCharacter* Defaults = Blueprint->GeneratedClass ? Blueprint->GeneratedClass->GetDefaultObject<ADTHCharacter>() : nullptr;
+		if (!Construction || !Defaults) return 0;
+		TSet<const UDTHWardrobeItem*> Present;
+		for (const USCS_Node* Node : Construction->GetAllNodes())
+		{
+			if (const USceneComponent* Template = Cast<USceneComponent>(Node->ComponentTemplate))
+			{
+				if (const UDTHWardrobeItem* Item = ADTHCharacter::TaggedItem(Template)) Present.Add(Item);
+			}
+		}
+		int32 Added = 0;
+		for (UDTHWardrobeItem* Item : Wardrobe->AllItems())
+		{
+			if (Present.Contains(Item) || (!Item->Mesh && !Item->Groom)) continue;
+			UClass* Class = Item->Mesh ? USkeletalMeshComponent::StaticClass() : UGroomComponent::StaticClass();
+			USCS_Node* Node = Construction->CreateNode(Class, ComponentName(*Construction, *Item));
+			if (USkeletalMeshComponent* Garment = Cast<USkeletalMeshComponent>(Node->ComponentTemplate))
+			{
+				Garment->SetSkeletalMeshAsset(Item->Mesh);
+			}
+			else if (UGroomComponent* Groom = Cast<UGroomComponent>(Node->ComponentTemplate))
+			{
+				Groom->BindingAsset = Item->GroomBinding;
+				Groom->GroomAsset = Item->Groom;
+			}
+			USceneComponent* Template = CastChecked<USceneComponent>(Node->ComponentTemplate);
+			Template->SetVisibility(false);
+			ADTHCharacter::TagItemComponent(Template, Item);
+			Node->SetParent(Defaults->Body.Get());
+			Construction->AddNode(Node);
+			++Added;
+		}
+		if (Added > 0)
+		{
+			FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+		}
+		return Added;
+	}
+
+	/**
+	 * BP_<Character> in Folder: a DTH Character on Wardrobe, wearing StartState, with the body's mesh and a component
+	 * per wardrobe item. An existing one keeps its settings and gets components for new items.
+	 */
 	void BuildBlueprint(const FString& Folder, const FString& Character, UDTHWardrobe* Wardrobe, const FString& StartState, FDTHImportReport& Report)
 	{
 		const FString Name = TEXT("BP_") + Character;
 		const FString PackageName = Folder / Name;
 		UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *(PackageName + TEXT(".") + Name), nullptr, LOAD_NoWarn | LOAD_Quiet);
-		if (Blueprint)
-		{
-			ADTHCharacter* Defaults = Blueprint->GeneratedClass ? Blueprint->GeneratedClass->GetDefaultObject<ADTHCharacter>() : nullptr;
-			if (Defaults && !Defaults->Wardrobe)
-			{
-				Defaults->Modify();
-				Defaults->Wardrobe = Wardrobe;
-				// Compiled again so new instances take the default (they copy what differed from the parent at compile time).
-				FKismetEditorUtilities::CompileBlueprint(Blueprint);
-				Blueprint->MarkPackageDirty();
-			}
-			Report.Info(FText::Format(LOCTEXT("BlueprintKept", "{0} exists; kept as it is (its wardrobe has the new outfits)."), FText::FromString(Name)));
-			return;
-		}
-		UPackage* Package = CreatePackage(*PackageName);
-		Blueprint = FKismetEditorUtilities::CreateBlueprint(ADTHCharacter::StaticClass(), Package, FName(*Name), BPTYPE_Normal,
-			UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass());
+		const bool bExisted = Blueprint != nullptr;
 		if (!Blueprint)
 		{
-			Report.Error(FText::Format(LOCTEXT("BlueprintFailed", "Could not create {0}."), FText::FromString(PackageName)));
+			UPackage* Package = CreatePackage(*PackageName);
+			Blueprint = FKismetEditorUtilities::CreateBlueprint(ADTHCharacter::StaticClass(), Package, FName(*Name), BPTYPE_Normal,
+				UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass());
+			if (!Blueprint)
+			{
+				Report.Error(FText::Format(LOCTEXT("BlueprintFailed", "Could not create {0}."), FText::FromString(PackageName)));
+				return;
+			}
+			FAssetRegistryModule::AssetCreated(Blueprint);
+			FKismetEditorUtilities::CompileBlueprint(Blueprint);
+		}
+		ADTHCharacter* Defaults = Blueprint->GeneratedClass ? Blueprint->GeneratedClass->GetDefaultObject<ADTHCharacter>() : nullptr;
+		if (!Defaults)
+		{
+			Report.Error(FText::Format(LOCTEXT("BlueprintNotCharacter", "{0} is not a DTH Character; its wardrobe was not set up."), FText::FromString(PackageName)));
 			return;
 		}
-		FAssetRegistryModule::AssetCreated(Blueprint);
-		FKismetEditorUtilities::CompileBlueprint(Blueprint);
-		if (ADTHCharacter* Defaults = Blueprint->GeneratedClass->GetDefaultObject<ADTHCharacter>())
+		Defaults->Modify();
+		if (!bExisted || !Defaults->Wardrobe)
 		{
 			Defaults->Wardrobe = Wardrobe;
+		}
+		if (!bExisted)
+		{
 			Defaults->WardrobeState = StartState;
 		}
-		// Compiled again so new instances take these defaults: a blueprint class copies only the properties that differed
+		// The body in the defaults too, so the Blueprint's viewport, Components panel and thumbnail show it.
+		if (Defaults->Body && !Defaults->Body->GetSkeletalMeshAsset())
+		{
+			Defaults->Body->Modify();
+			Defaults->Body->SetSkeletalMeshAsset(Wardrobe->Body);
+		}
+		const int32 Added = AddItemComponents(Blueprint, Wardrobe);
+		// Compiled after the defaults are set: a Blueprint class's new instances copy only the properties that differed
 		// from its parent's when it was compiled.
 		FKismetEditorUtilities::CompileBlueprint(Blueprint);
-		Package->MarkPackageDirty();
-		Report.Info(FText::Format(LOCTEXT("BlueprintMade", "{0}: the character with its wardrobe, wearing {1}. Place it in a level; key its Wardrobe State in Sequencer to change outfits."),
-			FText::FromString(Name), FText::FromString(StartState)));
+		Blueprint->MarkPackageDirty();
+		if (bExisted)
+		{
+			Report.Info(FText::Format(LOCTEXT("BlueprintKept", "{0} exists; kept its settings and added components for {1} new wardrobe items."), FText::FromString(Name), Added));
+		}
+		else
+		{
+			Report.Info(FText::Format(LOCTEXT("BlueprintMade", "{0}: the character with its wardrobe ({1} garment and groom components), wearing {2}. Place it in a level; key its Wardrobe State in Sequencer to change outfits."),
+				FText::FromString(Name), Added, FText::FromString(StartState)));
+		}
 	}
 }
 

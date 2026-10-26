@@ -140,6 +140,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Wardrobe")
 	void ResetToOutfit();
 
+	/**
+	 * Marks Component as the one that shows Item. The import tags the garment and groom components it adds to
+	 * BP_<Character>; components the actor makes itself (items added to the wardrobe later) are tagged the same way.
+	 */
+	static void TagItemComponent(USceneComponent* Component, const UDTHWardrobeItem* Item);
+
+	/** The item Component was tagged for, or null. */
+	static UDTHWardrobeItem* TaggedItem(const USceneComponent* Component);
+
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 
