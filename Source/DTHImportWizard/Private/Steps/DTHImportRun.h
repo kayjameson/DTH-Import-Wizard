@@ -16,6 +16,14 @@ struct FDTHImportRequest
 	TArray<int32> MeshIndices;
 	/** Re-import meshes and grooms that already exist in the destination; otherwise they're reused as they are. */
 	bool bReimportExistingMeshes = false;
+	/**
+	 * Add this export's garments and grooms to the character already in DestinationFolder (another outfit or hair
+	 * from its own Houdini file): its body is compared with the character's and never imported, and the body's steps
+	 * are skipped. Otherwise a full (base) import.
+	 */
+	bool bAddToCharacter = false;
+	/** The wardrobe outfit the export's garments become (empty: DefaultOutfitName). */
+	FString OutfitName;
 	/** Import onto this skeleton instead of the one the export targets (empty: the export's). */
 	FString SkeletonOverride;
 	/** The material plan as edited on the wizard's Materials page; unset: the default plan (BuildMaterialPlan). */

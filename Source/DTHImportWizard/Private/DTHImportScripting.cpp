@@ -97,7 +97,7 @@ TArray<FString> UDTHImportScripting::CheckMaterialMerges(const FString& ExportFo
 }
 
 TArray<FString> UDTHImportScripting::ImportCharacter(const FString& ExportFolder, const FString& DestinationFolder, bool bIncludeUnlisted,
-	bool bReimportExistingMeshes, const FString& SkeletonOverride)
+	bool bReimportExistingMeshes, const FString& SkeletonOverride, bool bAddToCharacter, const FString& OutfitName)
 {
 	TArray<FString> Result;
 	FString Error;
@@ -111,6 +111,8 @@ TArray<FString> UDTHImportScripting::ImportCharacter(const FString& ExportFolder
 	Request.DestinationFolder = DestinationFolder;
 	Request.bReimportExistingMeshes = bReimportExistingMeshes;
 	Request.SkeletonOverride = SkeletonOverride;
+	Request.bAddToCharacter = bAddToCharacter;
+	Request.OutfitName = OutfitName;
 	for (int32 Index = 0; Index < Request.Export->Meshes.Num(); ++Index)
 	{
 		if (Request.Export->Meshes[Index].bInManifest || bIncludeUnlisted)

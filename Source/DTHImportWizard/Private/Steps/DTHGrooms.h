@@ -3,6 +3,8 @@
 #include "CoreMinimal.h"
 
 class FDTHExport;
+class UGroomAsset;
+class UGroomBindingAsset;
 class USkeletalMesh;
 struct FDTHImportReport;
 
@@ -19,6 +21,15 @@ struct FDTHGroomPlan
 	FString MatchingSlot;
 };
 
+/** A groom the import made or reused, with its binding to the body (null when it couldn't be bound). */
+struct FDTHBuiltGroom
+{
+	/** The plan's Groom Name ("BaseHair"). */
+	FString Name;
+	UGroomAsset* Groom = nullptr;
+	UGroomBindingAsset* Binding = nullptr;
+};
+
 namespace DTHImport
 {
 	/** A plan per groom in the export: imported, bound to the head slot, 25 points for brows and lashes, 100 otherwise. */
@@ -27,9 +38,9 @@ namespace DTHImport
 	/**
 	 * The Groom Guide's "Unreal Engine - Basic setup" for each planned groom: imported at default options into
 	 * DestinationFolder, a binding on Body, and a per-groom copy of MI_DTH_Hair (Materials/MI_<Character><Groom>) in the
-	 * groom's material slot. Grooms that already exist are reused unless bReimportExisting. The Groom component on the
-	 * character blueprint is left to the user (a manual step).
+	 * groom's material slot. Grooms that already exist are reused unless bReimportExisting. The wardrobe step puts them
+	 * on the character blueprint.
 	 */
-	void BuildGrooms(const FDTHExport& Export, const TArray<FDTHGroomPlan>& Plans, USkeletalMesh* Body,
+	TArray<FDTHBuiltGroom> BuildGrooms(const FDTHExport& Export, const TArray<FDTHGroomPlan>& Plans, USkeletalMesh* Body,
 		const FString& DestinationFolder, bool bReimportExisting, FDTHImportReport& Report);
 }

@@ -36,12 +36,16 @@ public:
 	 * Runs the whole import as the wizard's Import button does: the export's manifest meshes (plus unlisted FBX
 	 * files if bIncludeUnlisted), post-process blueprint, deformer, curves, retargeting, pose assets and grooms, into
 	 * DestinationFolder (e.g. /Game/Characters/Vi). Existing meshes are reused unless bReimportExistingMeshes.
-	 * SkeletonOverride imports onto another skeleton (empty: the one the export targets).
+	 * SkeletonOverride imports onto another skeleton (empty: the one the export targets). bAddToCharacter adds the
+	 * export's garments and grooms to the character already in DestinationFolder as outfit OutfitName (empty: from the
+	 * garment names), after checking its body is the character's. Everything goes into the character's wardrobe and
+	 * BP_<Character>.
 	 * Returns the run's messages; errors start with "ERROR:", warnings with "WARNING:".
 	 */
 	UFUNCTION(BlueprintCallable, Category = "DTH Import Wizard")
 	static TArray<FString> ImportCharacter(const FString& ExportFolder, const FString& DestinationFolder, bool bIncludeUnlisted = false,
-		bool bReimportExistingMeshes = false, const FString& SkeletonOverride = TEXT(""));
+		bool bReimportExistingMeshes = false, const FString& SkeletonOverride = TEXT(""), bool bAddToCharacter = false,
+		const FString& OutfitName = TEXT(""));
 
 	/**
 	 * What the import set up on a skeletal mesh: post-process blueprint, deformer, registered curves (with their

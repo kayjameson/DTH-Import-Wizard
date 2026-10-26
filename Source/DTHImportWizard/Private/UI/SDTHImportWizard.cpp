@@ -13,6 +13,7 @@
 #include "PropertyEditorModule.h"
 #include "Settings/DTHImportSettings.h"
 #include "Steps/DTHImportRun.h"
+#include "Steps/DTHWardrobeBuild.h"
 #include "Steps/DTHMergeCheck.h"
 #include "Steps/DTHSkeleton.h"
 #include "Styling/AppStyle.h"
@@ -266,6 +267,44 @@ TSharedRef<SWidget> SDTHImportWizard::MakeMeshesPage()
 						[
 							SNew(STextBlock).Text(LOCTEXT("Reimport", "Reimport existing meshes and grooms"))
 						]
+					])
+			]
+
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
+			[
+				MakeSection(LOCTEXT("WardrobeSection", "Wardrobe"),
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
+						[
+							SNew(STextBlock).Text(LOCTEXT("OutfitLabel", "Outfit"))
+						]
+						+ SHorizontalBox::Slot().FillWidth(1.f)
+						[
+							SNew(SEditableTextBox)
+							.Text_Lambda([this]() { return FText::FromString(OutfitName); })
+							.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type) { OutfitName = Text.ToString().TrimStartAndEnd(); })
+							.ToolTipText(LOCTEXT("OutfitTip", "The outfit this export's garments (and head hair) become in the character's wardrobe. Key it in Sequencer as the character's Wardrobe State."))
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.f, 0.f, 0.f, 0.f)
+						[
+							SNew(SCheckBox)
+							.IsChecked_Lambda([this]() { return bAddToCharacter ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+							.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { bAddToCharacter = State == ECheckBoxState::Checked; })
+							.ToolTipText(LOCTEXT("AddOnTip", "This export is another outfit or hair for the character already in the Content Folder, made from its own Houdini file. Its body is checked against the character's and not imported; its garments and grooms go on the character's body and into its wardrobe. Retargeting, pose assets and the control rig are left as they are."))
+							[
+								SNew(STextBlock).Text(LOCTEXT("AddOn", "Add to an existing character"))
+							]
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+					[
+						SNew(STextBlock)
+						.AutoWrapText(true)
+						.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+						.Text(LOCTEXT("WardrobeHelp", "The import makes BP_<Character>: the body with every garment and groom of its wardrobe, one outfit shown at a time. Import further outfit or hair exports into the same folder with \"Add to an existing character\" ticked; they become more outfits on the same blueprint, and their grooms are bound to the same body."))
 					])
 			]
 
@@ -883,6 +922,13 @@ void SDTHImportWizard::LoadExport(const FString& Folder)
 			Row->bImport = Export->Meshes[Index].bInManifest;
 			MeshRows.Add(Row);
 		}
+		TArray<int32> Listed;
+		for (const TSharedPtr<FMeshRow>& Row : MeshRows)
+		{
+			if (Row->bImport) Listed.Add(Row->MeshIndex);
+		}
+		OutfitName = DTHImport::DefaultOutfitName(*Export, Listed);
+		bAddToCharacter = DTHImport::FindWardrobe(DestinationFolder) != nullptr;
 		CurrentPage = EPage::MeshesAndRig;
 	}
 	if (MeshList)
@@ -932,6 +978,8 @@ FReply SDTHImportWizard::OnImport()
 	Request.Export = Export;
 	Request.DestinationFolder = DestinationFolder;
 	Request.bReimportExistingMeshes = bReimportExistingMeshes;
+	Request.bAddToCharacter = bAddToCharacter;
+	Request.OutfitName = OutfitName;
 	Request.MaterialPlans = MaterialPlans;
 	Request.GroomPlans = GroomPlans;
 	for (const TSharedPtr<FMeshRow>& Row : MeshRows)
@@ -987,8 +1035,13 @@ FText SDTHImportWizard::GetStatusText() const
 		return LOCTEXT("StatusNoExport", "Pick a DazToHue export folder to begin.");
 	}
 	const int32 Count = MeshRows.FilterByPredicate([](const TSharedPtr<FMeshRow>& Row) { return Row->bImport; }).Num();
-	return FText::Format(LOCTEXT("StatusReady", "{0}: {1} skeletal meshes ticked for import into {2}"),
-		FText::FromString(Export->Character), Count, FText::FromString(DestinationFolder));
+	if (bAddToCharacter)
+	{
+		return FText::Format(LOCTEXT("StatusAddOn", "{0}: garments and grooms go to the character in {1} as outfit {2} (its body is checked, not imported)"),
+			FText::FromString(Export->Character), FText::FromString(DestinationFolder), FText::FromString(OutfitName));
+	}
+	return FText::Format(LOCTEXT("StatusReady", "{0}: {1} skeletal meshes ticked for import into {2}, outfit {3}"),
+		FText::FromString(Export->Character), Count, FText::FromString(DestinationFolder), FText::FromString(OutfitName));
 }
 
 FText SDTHImportWizard::GetExportSummary() const

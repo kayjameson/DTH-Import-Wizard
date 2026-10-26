@@ -158,9 +158,10 @@ TArray<FDTHGroomPlan> DTHImport::BuildGroomPlans(const FDTHExport& Export)
 	return Plans;
 }
 
-void DTHImport::BuildGrooms(const FDTHExport& Export, const TArray<FDTHGroomPlan>& Plans, USkeletalMesh* Body,
+TArray<FDTHBuiltGroom> DTHImport::BuildGrooms(const FDTHExport& Export, const TArray<FDTHGroomPlan>& Plans, USkeletalMesh* Body,
 	const FString& DestinationFolder, bool bReimportExisting, FDTHImportReport& Report)
 {
+	TArray<FDTHBuiltGroom> Built;
 	FString Folder = DestinationFolder;
 	Folder.RemoveFromEnd(TEXT("/"));
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
@@ -195,21 +196,14 @@ void DTHImport::BuildGrooms(const FDTHExport& Export, const TArray<FDTHGroomPlan
 			Groom->GetNumHairGroups(), FText::FromString(Material ? Material->GetName() : TEXT("none")),
 			FText::FromString(Binding ? Binding->GetName() : TEXT("none"))));
 		Made.Add(Groom->GetName() + (Binding ? TEXT(" + ") + Binding->GetName() : FString()));
+		Built.Add({ Plan.Name, Groom, Binding });
 	}
 
 	if (!Body && Made.Num() > 0)
 	{
 		Report.Warning(LOCTEXT("NoBody", "No body mesh was imported, so the grooms were not bound."));
 	}
-	if (Made.Num() > 0)
-	{
-		// Groom Guide, "Adding the groom to your character blueprint". The wizard makes no character blueprint.
-		FDTHManualStep& Step = Report.ManualSteps.AddDefaulted_GetRef();
-		Step.Title = LOCTEXT("GroomComponentTitle", "Add the grooms to your character blueprint");
-		Step.Instructions.Add(LOCTEXT("GroomComponent1", "Add a Groom component as a child of the Skeletal Mesh component for each groom."));
-		Step.Instructions.Add(FText::Format(LOCTEXT("GroomComponent2", "Set its Groom Asset and Binding Asset: {0}."), FText::FromString(FString::Join(Made, TEXT("; ")))));
-		Step.Instructions.Add(LOCTEXT("GroomComponent3", "Compile and save the blueprint."));
-	}
+	return Built;
 }
 
 #undef LOCTEXT_NAMESPACE

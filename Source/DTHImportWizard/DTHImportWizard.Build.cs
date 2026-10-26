@@ -40,6 +40,10 @@ public class DTHImportWizard : ModuleRules
 			"RigVM",
 			"RigVMDeveloper",
 			"HairStrandsCore",
+			"DTHWardrobe",
+			"AssetRegistry",
+			"MeshDescription",
+			"MovieScene",
 		});
 	}
 }

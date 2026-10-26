@@ -93,6 +93,10 @@ private:
 	FString DestinationFolder;
 	FString SkeletonPath;
 	bool bReimportExistingMeshes = false;
+	/** Add the export's garments and grooms to the character in DestinationFolder (an outfit or hair export). */
+	bool bAddToCharacter = false;
+	/** The wardrobe outfit the export's garments become. */
+	FString OutfitName;
 
 	/** The last material merge check, as shown on the Meshes page (empty until run). */
 	FText MergeCheckText;

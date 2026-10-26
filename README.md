@@ -1,6 +1,6 @@
 # DTH Import Wizard
 
-An Unreal Engine 5.8 editor plugin that imports a **DazToHue** character export (the files written by DazToHue's Houdini Export node) into a project in one pass. It sets up the character as DazToHue's own documentation and importer do, and adds the steps they leave to you: materials and textures, add-on pose assets, the modular control rig and a set of export checks.
+An Unreal Engine 5.8 editor plugin that imports a **DazToHue** character export (the files written by DazToHue's Houdini Export node) into a project in one pass. It sets up the character as DazToHue's own documentation and importer do, and adds the steps they leave to you: materials and textures, add-on pose assets, the modular control rig, a set of export checks, and a character blueprint with a wardrobe that further outfit and hair exports add to.
 
 > DazToHue is a separate product by its own author. This plugin doesn't include or change any DazToHue content; it needs the DazToHue Unreal content pack in your project and uses it as is.
 
@@ -13,6 +13,7 @@ An Unreal Engine 5.8 editor plugin that imports a **DazToHue** character export 
 - [Project settings](#project-settings)
 - [Using the wizard](#using-the-wizard)
 - [What an import does](#what-an-import-does)
+- [Wardrobe and character blueprint](#wardrobe-and-character-blueprint)
 - [Materials and textures](#materials-and-textures)
 - [Material merge check](#material-merge-check)
 - [Importing again](#importing-again)
@@ -25,7 +26,7 @@ An Unreal Engine 5.8 editor plugin that imports a **DazToHue** character export 
 
 ## Requirements
 
-- **Unreal Engine 5.8**, Windows (Win64), editor only.
+- **Unreal Engine 5.8**, Windows (Win64). The wizard is editor only; the character blueprint's runtime module (`DTHWardrobe`) also works in Movie Render Queue and packaged projects.
 - The **DazToHue Unreal content pack** added to the project (by default under `/Game/DazToHue`).
 - For exports that target the UE5 Mannequin: the **UE5 Mannequin** skeleton in the project.
 - Engine plugins **Interchange**, **Control Rig** and **Control Rig Modules** (enabled automatically with this plugin). DQS characters also need what DazToHue's DQS deformer graph needs (Deformer Graph).
@@ -59,6 +60,7 @@ Choose the export folder with the folder button at the top (the folder that hold
 2. **Meshes & Rig:**
    - a summary of the export (character, figure, target skeleton, skinning method);
    - the destination content folder;
+   - **Wardrobe:** the outfit name this export's garments become, and **Add to an existing character** for an outfit or hair export of a character already imported into the destination (ticked automatically when the destination has a wardrobe). See [Wardrobe and character blueprint](#wardrobe-and-character-blueprint);
    - the meshes to import (manifest meshes are ticked; FBX files not listed in the manifest are shown unticked);
    - **Reimport existing meshes and grooms:** replace meshes and grooms that already exist in the destination instead of reusing them;
    - **Check Material Merges:** runs the [material merge check](#material-merge-check) on its own.
@@ -93,7 +95,10 @@ In order:
    - its hierarchy checked against the mesh's rest pose;
    - set as the mesh's default animating rig.
 10. **Grooms:** the DazToHue Groom guide's Unreal setup for each ticked groom. See [Grooms](#grooms).
-11. **Save** of everything the import created or changed.
+11. **Wardrobe and character blueprint:** the wardrobe items, the export's outfit and `BP_<Character>`. See [Wardrobe and character blueprint](#wardrobe-and-character-blueprint).
+12. **Save** of everything the import created or changed.
+
+An **add-on import** (Add to an existing character) does steps 1 to 6, 10, 11 and 12 for the export's garments and grooms only. First it checks the export's body against the character's; the export's body is never imported, and retargeting, pose assets and the control rig are left as they are.
 
 ## Grooms
 
@@ -103,7 +108,38 @@ Export each groom from Houdini with the DazToHue Groom Export node, with its **E
 - **Binding** on the body mesh (target and source), named `ABC_<Groom Name>_<Body>_<Body>_Binding` as the editor's Create Binding names it. The Matching Section is the element number of the chosen body slot, by default the slot whose name ends in `Head`. Interpolation points default to 25 for grooms named like brows or lashes and 100 for everything else, as the guide suggests.
 - **Material:** a copy of DazToHue's `MI_DTH_Hair` per groom, `Materials/MI_<Character><Groom Name>`, in the groom's material slot. It shows the strand colours set in Houdini; change its parameters to override them.
 
-Adding a Groom component for each groom to your character blueprint (Groom Asset and Binding Asset) is listed as a manual step, since the wizard doesn't make a character blueprint. The plugin turns on the engine's **Groom** and **Alembic Groom Importer** plugins.
+Each groom becomes a wardrobe item, so `BP_<Character>` shows it, bound to the body; there is no Groom component to add by hand. The binding is built once, at import, against the character's one body, and is never rebuilt when outfits or hair change. The plugin turns on the engine's **Groom** and **Alembic Groom Importer** plugins.
+
+## Wardrobe and character blueprint
+
+Every import fills the character's wardrobe in `<Character>/Wardrobe` and makes sure `BP_<Character>` exists next to it.
+
+- **Items** (`DA_Item_<Character>_<Name>`): one per garment and per groom. Each has a **Slot** guessed from its name: Torso, Legs, Feet, Arms, Shoulders, Neck, Head, Underwear, Accessory for garments; Hair, Eyebrows, Eyelashes, Vellus, Beard for grooms. Edit the slot or the name the item is known by (**Item Name**) freely: a later import finds an item by its mesh or groom, not its name.
+- **Base items:** brows, lashes and vellus are part of the face and are worn with every outfit.
+- **Outfits** (`DA_Outfit_<Character>_<Name>`): the export's garments and head hair become the outfit named on the Meshes & Rig page. The name defaults to what the garment names share, e.g. `Witch` for `Witch_Dress`, `Witch_Hat`... The first import also makes **Nude** (head hair only).
+- **The wardrobe** (`DA_Wardrobe_<Character>`): the body, the base items, the outfits, and **extra items**. An export with grooms but no garments (a new hairstyle) adds them as extra items instead of making an outfit.
+- **`BP_<Character>`:** a **DTH Character** on the wardrobe, wearing the first import's outfit. It has the body (animate this component) and, created once, every garment (following the body's pose and its joint correctives) and every groom (bound to the body). Changing outfits only shows and hides them.
+
+### Wardrobe State
+
+What the character wears is one text property, **Wardrobe State**, set in the Details panel or keyed in Sequencer (add a **Wardrobe State** track to the actor; each key is a state):
+
+| State | Wears |
+|---|---|
+| `Witch` | the Witch outfit and the base items |
+| `Witch -Hat -Heels` | without those items |
+| `Witch -slot:Feet` | without every Feet item |
+| `Witch +Ponytail` | with an item from anywhere in the wardrobe; it replaces the worn items of its slot (the outfit's hair, here) |
+| `-Hat` | the current outfit, with new overrides |
+| empty | the wardrobe's first outfit |
+
+Names are case-insensitive and can be separated by spaces or commas. Unknown names are reported in the Output Log (category `LogDTHWardrobe`), which also logs each state set from Sequencer, scripting or Blueprints.
+
+### More outfits and hairstyles
+
+A character can have any number of outfits and hairstyles, each exported from its own Houdini file. Import each one into the character's folder with **Add to an existing character** ticked. Its garments and grooms go on the character's body and into its wardrobe, and the outfit is available on the same `BP_<Character>`.
+
+The export's body has to be the character's body: same vertex count, rest-pose size and bones as the file the character's body was imported from. Otherwise the import stops before anything is imported and says what differs. So export add-ons from a Houdini file with the same character at the same subdivision level, and **without the Occlusion node** (it deletes body polygons under the clothing, which changes the body).
 
 ## Materials and textures
 
@@ -161,6 +197,7 @@ Importing into a folder that already holds the character is safe:
 - **The post-process blueprint copy** is reused. An add-on pose node already in it isn't added twice.
 - **Pose assets** are rebuilt in place, so anything that references them keeps working.
 - **The control rig** is updated.
+- **The wardrobe** is only added to: existing items (found by mesh or groom), outfits, slots, names and `BP_<Character>` are kept.
 
 ## Scripting
 
@@ -170,7 +207,7 @@ Everything the wizard does is available to editor Python and Blueprints through 
 |---|---|
 | `describe_export(export_folder)` | What the manifest says: character, DTH version, figure, target skeleton, skinning, meshes (with their slot counts), pose assets, curve files. |
 | `check_material_merges(export_folder, daz_export_fbx="")` | The material merge check on its own. |
-| `import_character(export_folder, destination_folder, include_unlisted=False, reimport_existing_meshes=False, skeleton_override="")` | A full import with the default material plan; returns the import's messages. |
+| `import_character(export_folder, destination_folder, include_unlisted=False, reimport_existing_meshes=False, skeleton_override="", add_to_character=False, outfit_name="")` | A full import with the default material plan, or with `add_to_character` an add-on import into the character in `destination_folder`; returns the import's messages. |
 | `describe_character(skeletal_mesh_path, pose_folder="")` | What an import set up on a mesh: post-process blueprint, deformer, curves, retargeting, pose assets. |
 | `open_wizard(export_folder="", page="")` | Opens the wizard, loads an export and shows a page (`Settings`, `Meshes`, `Materials`, `Grooms`, `Import`). |
 
@@ -192,6 +229,8 @@ for line in unreal.DTHImportScripting.import_character(export, "/Game/Characters
 - **A mesh "ended up on skeleton ... instead of ...":** the FBX doesn't match the target skeleton. Check the Houdini Skeleton node's source and target skeleton settings and export again.
 - **Wrong texture on part of a mesh:** run **Check Material Merges**. A merged slot with different texture sets is the usual cause.
 - **"Recompute Tangents needs ... Support Compute Skin Cache":** turn it on in Project Settings (Rendering) for linear-skinned characters.
+- **"This export's body is not ...'s body":** an add-on export was made from a different body. See [More outfits and hairstyles](#more-outfits-and-hairstyles).
+- **The body disappears for a moment after changing Wardrobe State in the Details panel:** the editor rebuilds the actor's components and the body takes a few frames to show again. Keys in Sequencer don't rebuild anything.
 - **The editor stops responding during an import:** large exports take minutes to import (each pose-asset FBX can take a minute or more), and the editor waits until the import finishes.
 
 ## Limitations
@@ -204,7 +243,7 @@ for line in unreal.DTHImportScripting.import_character(export, "/Game/Characters
 
 ## Building from source
 
-The plugin is a standard editor plugin (C++, module `DTHImportWizard`). Copy it into a project's `Plugins` folder and build the project's editor target, or package it with
+The plugin is a standard C++ plugin with an editor module (`DTHImportWizard`) and a runtime module (`DTHWardrobe`). Copy it into a project's `Plugins` folder and build the project's editor target, or package it with
 
 ```
 RunUAT BuildPlugin -Plugin=<path>/DTHImportWizard.uplugin -Package=<output folder> -TargetPlatforms=Win64
