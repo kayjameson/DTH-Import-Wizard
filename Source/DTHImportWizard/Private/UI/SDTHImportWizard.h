@@ -97,6 +97,10 @@ private:
 	bool bAddToCharacter = false;
 	/** The wardrobe outfit the export's garments become. */
 	FString OutfitName;
+	/** Delete an older wardrobe in the destination's Wardrobe folder instead of stopping. */
+	bool bDeleteOldWardrobe = false;
+	/** Add morph-driven jiggle physics to the post-process blueprint. Offered only for exports that have it. */
+	bool bJigglePhysics = false;
 
 	/** The last material merge check, as shown on the Meshes page (empty until run). */
 	FText MergeCheckText;

@@ -75,6 +75,7 @@ TSharedPtr<FDTHExport> FDTHExport::Load(const FString& InFolder, FString& OutErr
 	}
 	Export->AddUnlistedMeshes();
 	Export->FindGrooms();
+	Export->FindPhysicsDrivers();
 	return Export;
 }
 
@@ -209,6 +210,27 @@ void FDTHExport::FindGrooms()
 			Grooms.Add({ Name, Folder / File });
 		}
 	}
+}
+
+void FDTHExport::FindPhysicsDrivers()
+{
+	// One file per PHY group, plus _complete.txt holding all of them (DTH 1.2 jiggle video [33:36]).
+	TArray<FString> Files;
+	const FString DriverFolder = Folder / TEXT("Pose Drivers/Phys");
+	IFileManager::Get().FindFiles(Files, *(DriverFolder / TEXT("phy_*.txt")), true, false);
+	Files.Sort();
+	for (const FString& File : Files)
+	{
+		PhysicsDriverFiles.Add(DriverFolder / File);
+	}
+}
+
+bool FDTHExport::HasPhysics() const
+{
+	return IsGenesis9() && !PhysicsDriverFiles.IsEmpty() && PoseAssets.ContainsByPredicate([](const FDTHPoseAssetEntry& Entry)
+	{
+		return Entry.Category.Equals(TEXT("PHY"), ESearchCase::IgnoreCase);
+	});
 }
 
 const FDTHMeshEntry* FDTHExport::FindBody() const

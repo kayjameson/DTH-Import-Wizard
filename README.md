@@ -60,7 +60,7 @@ Choose the export folder with the folder button at the top (the folder that hold
 2. **Meshes & Rig:**
    - a summary of the export (character, figure, target skeleton, skinning method);
    - the destination content folder;
-   - **Wardrobe:** the outfit name this export's garments become, and **Add to an existing character** for an outfit or hair export of a character already imported into the destination (ticked automatically when the destination has a wardrobe). See [Wardrobe and character blueprint](#wardrobe-and-character-blueprint);
+   - **Wardrobe:** the outfit name this export's garments become, and **Add to an existing character** for an outfit or hair export of a character already imported into the destination (ticked automatically when the destination has a wardrobe), and **Delete the old wardrobe** (see [Importing again](#importing-again)). See [Wardrobe and character blueprint](#wardrobe-and-character-blueprint);
    - the meshes to import (manifest meshes are ticked; FBX files not listed in the manifest are shown unticked);
    - **Reimport existing meshes and grooms:** replace meshes and grooms that already exist in the destination instead of reusing them;
    - **Check Material Merges:** runs the [material merge check](#material-merge-check) on its own.
@@ -87,11 +87,12 @@ In order:
    - for linear exports, Recompute Tangents on the head or face section (needs **Support Compute Skin Cache** in Project Settings).
 6. **Curves:** every curve in the export's `Animation Curves` files is registered on every mesh.
 7. **Retargeting** (UE5 Mannequin exports): the translation retargeting modes DazToHue sets on the Mannequin skeleton.
-8. **Pose assets:** one per exported category at `PoseAssets/PA_<Character><Category>`, built from the exported animation and pose names, and made additive on its rest pose. **Add-on categories** (for example GEN and FBM) are evaluated only once their pose asset is in the character's post-process blueprint. The wizard adds a Pose Blend node for each one just before Output Pose and recompiles. If that fails, it's listed as a manual step.
+8. **Pose assets:** one per exported category at `PoseAssets/PA_<Character><Category>`, built from the exported animation and pose names, and made additive on its rest pose. **Add-on categories** (for example GEN and FBM) are evaluated only once their pose asset is in the character's post-process blueprint. The wizard adds a Pose Blend node for each one just before Output Pose and recompiles. If that fails, it's listed as a manual step. PHY is the exception: it stays out of that step, because the jiggle Pose Drivers use it.
+   With **Jiggle physics (Genesis 9)** ticked, the wizard also adds Spring Controllers on the five physics bones and the exported Pose Drivers to the post-process blueprint, with stiffness and damping as blueprint variables for each region. It fills in the pose targets the export leaves empty and sets the driver radius to 2, so the character isn't deformed at rest. The option is available for Genesis 9 exports with a PHY pose asset and pose driver code, which need the physics bones ticked on DazToHueSkeleton.
 9. **Control rig:** a modular control rig, `MCR_<Character>`, on the first imported mesh:
    - DazToHue's Body and Face modules, and its GP9 or DK9 module when the mesh has those bones;
    - connected to the mesh's sockets and bones;
-   - DazToHue's control shape library;
+   - DazToHue's control shape library, checked to reach the compiled rig, so its controls show their shapes in Sequencer;
    - its hierarchy checked against the mesh's rest pose;
    - set as the mesh's default animating rig.
 10. **Grooms:** the DazToHue Groom guide's Unreal setup for each ticked groom. See [Grooms](#grooms).
@@ -212,6 +213,10 @@ Importing into a folder that already holds the character is safe:
 - **The control rig** is updated.
 - **The wardrobe** is only added to: existing items (found by mesh or groom), outfits, slots, names and `BP_<Character>` are kept.
 
+Before it makes anything, the import checks every path it writes: the meshes, the post-process blueprint, pose assets, the control rig, grooms and `BP_<Character>`. Unreal can't replace an asset with one of another kind, so if one of those paths holds something else, the import stops and names it. Move or rename it and import again.
+
+The destination's `Wardrobe` folder belongs to the import's wardrobe. If it holds anything else, such as an older wardrobe made by the Python wizard, the import stops and lists those assets. Either move them out of the folder, or tick **Delete the old wardrobe** to have the import delete them. Anything that used them, such as an old character blueprint, loses those references; the import lists each one.
+
 ## Scripting
 
 Everything the wizard does is available to editor Python and Blueprints through `DTHImportScripting` (`unreal.DTHImportScripting` in Python). The calls that return lines mark warnings and errors with `WARNING:` and `ERROR:` prefixes.
@@ -220,7 +225,7 @@ Everything the wizard does is available to editor Python and Blueprints through 
 |---|---|
 | `describe_export(export_folder)` | What the manifest says: character, DTH version, figure, target skeleton, skinning, meshes (with their slot counts), pose assets, curve files. |
 | `check_material_merges(export_folder, daz_export_fbx="")` | The material merge check on its own. |
-| `import_character(export_folder, destination_folder, include_unlisted=False, reimport_existing_meshes=False, skeleton_override="", add_to_character=False, outfit_name="")` | A full import with the default material plan, or with `add_to_character` an add-on import into the character in `destination_folder`; returns the import's messages. |
+| `import_character(export_folder, destination_folder, include_unlisted=False, reimport_existing_meshes=False, skeleton_override="", add_to_character=False, outfit_name="", delete_old_wardrobe=False, jiggle_physics=False)` | A full import with the default material plan, or with `add_to_character` an add-on import into the character in `destination_folder`; `delete_old_wardrobe` as the wizard's check box; `jiggle_physics` as its Jiggle physics box. Returns the import's messages. |
 | `describe_character(skeletal_mesh_path, pose_folder="")` | What an import set up on a mesh: post-process blueprint, deformer, curves, retargeting, pose assets. |
 | `open_wizard(export_folder="", page="")` | Opens the wizard, loads an export and shows a page (`Settings`, `Meshes`, `Materials`, `Grooms`, `Import`). |
 
@@ -244,6 +249,8 @@ for line in unreal.DTHImportScripting.import_character(export, "/Game/Characters
 - **"Recompute Tangents needs ... Support Compute Skin Cache":** turn it on in Project Settings (Rendering) for linear-skinned characters.
 - **"This export's body is not ...'s body":** an add-on export was made from a different body. See [More outfits and hairstyles](#more-outfits-and-hairstyles).
 - **The body disappears for a moment after changing Wardrobe State in the Details panel:** the editor rebuilds the actor's components and the body takes a few frames to show again. Keys in Sequencer don't rebuild anything.
+- **"... holds an older wardrobe" or "... is a ...; the import puts a ... there":** something else is at a path the import writes. See [Importing again](#importing-again).
+- **A character's controls show in the Control Rig editor but not in Sequencer:** its rig was made by version 0.3.1 or earlier, which didn't pass the shape library on to the compiled rig. Import the character again (nothing needs ticking); the rig is repaired in place.
 - **The editor stops responding during an import:** large exports take minutes to import (each pose-asset FBX can take a minute or more), and the editor waits until the import finishes.
 
 ## Limitations

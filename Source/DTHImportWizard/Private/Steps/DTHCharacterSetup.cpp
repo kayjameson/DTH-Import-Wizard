@@ -481,7 +481,8 @@ void DTHImport::BuildPoseAssets(const FDTHExport& Export, USkeleton* Skeleton, c
 		ObjectTools::ForceDeleteObjects({ Animation }, false);
 		Report.Info(FText::Format(LOCTEXT("PoseBuilt", "Built {0}: {1} poses, additive on {2}."),
 			FText::FromString(Name), PoseAsset->GetNumPoses(), FText::FromString(PoseNames.Num() > 0 ? PoseNames[0] : FString(TEXT("pose 0")))));
-		if (bStandard && !IsCoreCategory(Entry.Category))
+		// PHY poses are driven by the jiggle Pose Drivers, not a Pose Blend node (DTH 1.2 jiggle video [44:54]).
+		if (bStandard && !IsCoreCategory(Entry.Category) && !Entry.Category.Equals(TEXT("PHY"), ESearchCase::IgnoreCase))
 		{
 			// Golden Palace 9 guide steps 123-125: an add-on category (GEN, FBM) is evaluated only once its pose
 			// asset sits in the character's post-process blueprint copy, "just before the Output Pose node". DTH's

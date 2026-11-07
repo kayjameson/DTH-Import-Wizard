@@ -17,6 +17,8 @@
 #include "Steps/DTHMeshImport.h"
 #include "Steps/DTHSkeleton.h"
 #include "Steps/DTHBodyMatch.h"
+#include "Steps/DTHJigglePhysics.h"
+#include "Steps/DTHPathCheck.h"
 #include "Steps/DTHWardrobeBuild.h"
 #include "DTHWardrobeTypes.h"
 #include "UObject/UObjectIterator.h"
@@ -82,6 +84,37 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 	{
 		Report.Error(FText::FromString(Error.IsEmpty() ? TEXT("Skeleton not found: ") + Request.SkeletonOverride : Error));
 		return Report;
+	}
+
+	// Before anything is made: Unreal can't replace an asset with one of another class, and stops the editor when asked to.
+	{
+		const TArray<FDTHPathClash> Clashes = FindPathClashes(Request);
+		const TArray<FDTHPathClash> OldWardrobe = Clashes.FilterByPredicate([](const FDTHPathClash& Clash) { return Clash.bOldWardrobe; });
+		const TArray<FDTHPathClash> Others = Clashes.FilterByPredicate([](const FDTHPathClash& Clash) { return !Clash.bOldWardrobe; });
+		for (const FDTHPathClash& Clash : Others)
+		{
+			Report.Error(FText::Format(LOCTEXT("PathClash", "{0} is a {1}; the import puts a {2} there. Move or rename it."),
+				FText::FromString(Clash.Path), FText::FromString(Clash.Found), FText::FromString(Clash.Expected)));
+		}
+		if (!OldWardrobe.IsEmpty() && !Request.bDeleteOldWardrobe)
+		{
+			for (const FDTHPathClash& Clash : OldWardrobe)
+			{
+				Report.Error(FText::Format(LOCTEXT("OldWardrobeAsset", "{0} ({1}) is not a DTH wardrobe asset."), FText::FromString(Clash.Path), FText::FromString(Clash.Found)));
+			}
+			Report.Error(FText::Format(LOCTEXT("OldWardrobe", "{0}/Wardrobe holds an older wardrobe ({1} assets above, e.g. from the Python wizard). Move it out of that folder, or tick \"Delete the old wardrobe\" to have the import delete it."),
+				FText::FromString(Request.DestinationFolder), OldWardrobe.Num()));
+		}
+		if (!Others.IsEmpty() || (!OldWardrobe.IsEmpty() && !Request.bDeleteOldWardrobe))
+		{
+			Report.Error(LOCTEXT("StoppedClash", "Nothing was imported."));
+			return Report;
+		}
+		if (!OldWardrobe.IsEmpty() && !DeleteOldWardrobe(OldWardrobe, Report))
+		{
+			Report.Error(LOCTEXT("StoppedOldWardrobe", "Nothing was imported."));
+			return Report;
+		}
 	}
 
 	// An add-on export (another outfit or hair for the same character) goes on the character's existing body: its own
@@ -226,6 +259,10 @@ FDTHImportReport DTHImport::RunImport(const FDTHImportRequest& Request)
 
 		Task.EnterProgressFrame(1.f, LOCTEXT("TaskPoses", "Pose assets"));
 		BuildPoseAssets(Export, Skeleton, Request.DestinationFolder, PostProcess, Report);
+		if (Request.bJigglePhysics && Meshes.Num() > 0)
+		{
+			AddJigglePhysics(Export, Meshes[0], Request.DestinationFolder, PostProcess, Report);
+		}
 
 		Task.EnterProgressFrame(1.f, LOCTEXT("TaskRig", "Control rig"));
 		// On the first mesh, whatever its name, as the DTH importer builds MCR_<Character>.

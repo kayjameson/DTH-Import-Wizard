@@ -24,6 +24,13 @@ struct FDTHImportRequest
 	bool bAddToCharacter = false;
 	/** The wardrobe outfit the export's garments become (empty: DefaultOutfitName). */
 	FString OutfitName;
+	/**
+	 * Delete what else is in <DestinationFolder>/Wardrobe (an older wardrobe, e.g. the Python wizard's) before
+	 * importing. Otherwise the import stops when it finds one.
+	 */
+	bool bDeleteOldWardrobe = false;
+	/** Add morph-driven jiggle physics to the post-process blueprint copy. Needs FDTHExport::HasPhysics. */
+	bool bJigglePhysics = false;
 	/** Import onto this skeleton instead of the one the export targets (empty: the export's). */
 	FString SkeletonOverride;
 	/** The material plan as edited on the wizard's Materials page; unset: the default plan (BuildMaterialPlan). */

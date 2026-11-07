@@ -211,17 +211,27 @@ UControlRigBlueprint* DTHImport::BuildControlRig(const FDTHExport& Export, USkel
 	{
 		return Library.ToSoftObjectPath().GetLongPackageName() == ShapeLibraryPath;
 	});
-	if (!bHasLibrary)
+	// Set as a property edit, as the DTH importer's set_editor_property does: only the edit's notification passes the
+	// libraries on to the rig class's default, which the rigs in levels and Sequencer read their shapes from. Without
+	// it the rig editor shows the shapes but Sequencer's controls have none. Sent for existing rigs too, which repairs
+	// rigs that were given the library without it.
+	UControlRigShapeLibrary* Library = bHasLibrary ? nullptr : LoadObject<UControlRigShapeLibrary>(nullptr, *ShapeLibraryPath, nullptr, LOAD_NoWarn);
+	if (!bHasLibrary && !Library)
 	{
-		if (UControlRigShapeLibrary* Library = LoadObject<UControlRigShapeLibrary>(nullptr, *ShapeLibraryPath, nullptr, LOAD_NoWarn))
+		Report.Warning(FText::Format(LOCTEXT("ShapesMissing", "Control shape library not found: {0}"), FText::FromString(ShapeLibraryPath)));
+	}
+	else if (FProperty* LibrariesProperty = FindFProperty<FProperty>(Rig->GetClass(), TEXT("ShapeLibraries")))
+	{
+		static_cast<UObject*>(Rig)->PreEditChange(LibrariesProperty);
+		if (Library)
 		{
-			static_cast<UObject*>(Rig)->Modify();
 			Libraries.Add(Library);
 		}
-		else
-		{
-			Report.Warning(FText::Format(LOCTEXT("ShapesMissing", "Control shape library not found: {0}"), FText::FromString(ShapeLibraryPath)));
-		}
+		FEditPropertyChain Chain;
+		Chain.AddHead(LibrariesProperty);
+		FPropertyChangedEvent Change(LibrariesProperty, EPropertyChangeType::ValueSet);
+		FPropertyChangedChainEvent ChainChange(Chain, Change);
+		static_cast<UObject*>(Rig)->PostEditChangeChainProperty(ChainChange);
 	}
 
 	// The mesh's own bones at its rest pose have the last word, then rebuild the modules on top of them.
@@ -229,6 +239,18 @@ UControlRigBlueprint* DTHImport::BuildControlRig(const FDTHExport& Export, USkel
 	Hierarchy->ResetPoseToInitial(ERigElementType::All);
 	RigAsset->RecompileModularRig();
 	FKismetEditorUtilities::CompileBlueprint(Rig);
+
+	// What Sequencer's rigs will draw their controls with.
+	const TScriptInterface<IControlRigRuntimeAssetInterface> Runtime = RigAsset->GetRuntimeAssetInterface();
+	const bool bRuntimeHasLibrary = Runtime && Runtime->GetShapeLibraries().ContainsByPredicate([&](const TSoftObjectPtr<UControlRigShapeLibrary>& Entry)
+	{
+		return Entry.ToSoftObjectPath().GetLongPackageName() == ShapeLibraryPath;
+	});
+	if (!bRuntimeHasLibrary)
+	{
+		Report.Error(FText::Format(LOCTEXT("RuntimeShapesMissing", "{0}'s compiled rig has no {1}, so its controls would show no shapes in Sequencer."),
+			FText::FromString(RigName), FText::FromString(FPaths::GetBaseFilename(ShapeLibraryPath))));
+	}
 
 	TArray<FString> OpenConnectors;
 	for (const FRigConnectorElement* Connector : Hierarchy->GetConnectors())

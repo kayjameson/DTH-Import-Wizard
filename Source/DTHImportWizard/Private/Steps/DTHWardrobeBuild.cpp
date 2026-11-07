@@ -49,15 +49,24 @@ namespace
 		{ TEXT("fuzz"), TEXT("Vellus") }, { TEXT("peach"), TEXT("Vellus") }, { TEXT("beard"), TEXT("Beard") },
 		{ TEXT("moustache"), TEXT("Beard") }, { TEXT("mustache"), TEXT("Beard") }, { TEXT("stubble"), TEXT("Beard") } };
 
-	/** A new asset of class T at Folder/Name, or the existing one. */
+	/**
+	 * A new asset of class T at Folder/Name, or the existing one. Null (and an error) when an asset of another class
+	 * is there: Unreal can't replace it, and stops the editor when asked to.
+	 */
 	template <typename T>
-	T* FindOrCreate(const FString& Folder, const FString& Name, bool& bOutCreated)
+	T* FindOrCreate(const FString& Folder, const FString& Name, bool& bOutCreated, FDTHImportReport& Report)
 	{
 		const FString PackageName = Folder / Name;
 		bOutCreated = false;
-		if (T* Existing = LoadObject<T>(nullptr, *(PackageName + TEXT(".") + Name), nullptr, LOAD_NoWarn | LOAD_Quiet))
+		if (UObject* Found = StaticLoadObject(UObject::StaticClass(), nullptr, *(PackageName + TEXT(".") + Name), nullptr, LOAD_NoWarn | LOAD_Quiet))
 		{
-			return Existing;
+			if (T* Existing = Cast<T>(Found))
+			{
+				return Existing;
+			}
+			Report.Error(FText::Format(LOCTEXT("OtherClass", "{0} is a {1}, not a {2}; it was left as it is."),
+				FText::FromString(Found->GetPathName()), FText::FromString(Found->GetClass()->GetName()), FText::FromString(T::StaticClass()->GetName())));
+			return nullptr;
 		}
 		UPackage* Package = CreatePackage(*PackageName);
 		T* Asset = NewObject<T>(Package, FName(*Name), RF_Public | RF_Standalone | RF_Transactional);
@@ -108,7 +117,8 @@ namespace
 				}
 			}
 			bool bCreated = false;
-			UDTHWardrobeItem* Item = FindOrCreate<UDTHWardrobeItem>(Folder, FString::Printf(TEXT("DA_Item_%s_%s"), *Character, *Sanitize(Name)), bCreated);
+			UDTHWardrobeItem* Item = FindOrCreate<UDTHWardrobeItem>(Folder, FString::Printf(TEXT("DA_Item_%s_%s"), *Character, *Sanitize(Name)), bCreated, Report);
+			if (!Item) return nullptr;
 			Item->Modify();
 			Item->Mesh = Mesh;
 			Item->Groom = Groom;
@@ -125,7 +135,8 @@ namespace
 		UDTHOutfit* Outfit(const FString& Name, const TArray<UDTHWardrobeItem*>& Items)
 		{
 			bool bCreated = false;
-			UDTHOutfit* Outfit = FindOrCreate<UDTHOutfit>(Folder, FString::Printf(TEXT("DA_Outfit_%s_%s"), *Character, *Sanitize(Name)), bCreated);
+			UDTHOutfit* Outfit = FindOrCreate<UDTHOutfit>(Folder, FString::Printf(TEXT("DA_Outfit_%s_%s"), *Character, *Sanitize(Name)), bCreated, Report);
+			if (!Outfit) return nullptr;
 			Outfit->Modify();
 			Outfit->OutfitName = Name;
 			int32 Added = 0;
@@ -146,7 +157,8 @@ namespace
 		UDTHWardrobe* Wardrobe(USkeletalMesh* Body)
 		{
 			bool bCreated = false;
-			UDTHWardrobe* Wardrobe = FindOrCreate<UDTHWardrobe>(Folder, FString::Printf(TEXT("DA_Wardrobe_%s"), *Character), bCreated);
+			UDTHWardrobe* Wardrobe = FindOrCreate<UDTHWardrobe>(Folder, FString::Printf(TEXT("DA_Wardrobe_%s"), *Character), bCreated, Report);
+			if (!Wardrobe) return nullptr;
 			Wardrobe->Modify();
 			if (!Wardrobe->Body)
 			{
@@ -237,7 +249,14 @@ namespace
 	{
 		const FString Name = TEXT("BP_") + Character;
 		const FString PackageName = Folder / Name;
-		UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *(PackageName + TEXT(".") + Name), nullptr, LOAD_NoWarn | LOAD_Quiet);
+		UObject* Found = StaticLoadObject(UObject::StaticClass(), nullptr, *(PackageName + TEXT(".") + Name), nullptr, LOAD_NoWarn | LOAD_Quiet);
+		UBlueprint* Blueprint = Cast<UBlueprint>(Found);
+		if (Found && !Blueprint)
+		{
+			Report.Error(FText::Format(LOCTEXT("BlueprintOtherClass", "{0} is a {1}, not a Blueprint; no character blueprint was made."),
+				FText::FromString(PackageName), FText::FromString(Found->GetClass()->GetName())));
+			return;
+		}
 		const bool bExisted = Blueprint != nullptr;
 		if (!Blueprint)
 		{
@@ -404,13 +423,17 @@ void DTHImport::BuildWardrobe(const FDTHExport& Export, const FString& Folder, U
 			const bool bTaken = Builder.Known.ContainsByPredicate([&](const UDTHWardrobeItem* Item) { return Item->Mesh != Garment && Item->IsNamed(Short); });
 			if (!bTaken) Name = Short;
 		}
-		OutfitItems.Add(Builder.Item(Garment, nullptr, nullptr, Name, DTHImport::GarmentSlot(Garment->GetName())));
+		if (UDTHWardrobeItem* Item = Builder.Item(Garment, nullptr, nullptr, Name, DTHImport::GarmentSlot(Garment->GetName())))
+		{
+			OutfitItems.Add(Item);
+		}
 	}
 	for (const FDTHBuiltGroom& Groom : Grooms)
 	{
 		if (!Groom.Groom) continue;
 		const FName Slot = DTHImport::GroomSlot(Groom.Name);
 		UDTHWardrobeItem* Item = Builder.Item(nullptr, Groom.Groom, Groom.Binding, Groom.Name, Slot);
+		if (!Item) continue;
 		(DTHImport::IsBaseSlot(Slot) ? BaseItems : HairItems).Add(Item);
 		if (!Groom.Binding)
 		{
@@ -419,6 +442,11 @@ void DTHImport::BuildWardrobe(const FDTHExport& Export, const FString& Folder, U
 	}
 
 	UDTHWardrobe* Wardrobe = Builder.Wardrobe(Body);
+	if (!Wardrobe)
+	{
+		Report.Error(LOCTEXT("NoWardrobe", "No wardrobe or character blueprint was made (see above)."));
+		return;
+	}
 	for (UDTHWardrobeItem* Item : BaseItems)
 	{
 		Wardrobe->BaseItems.AddUnique(Item);
@@ -428,8 +456,11 @@ void DTHImport::BuildWardrobe(const FDTHExport& Export, const FString& Folder, U
 	{
 		TArray<UDTHWardrobeItem*> Items = OutfitItems;
 		Items.Append(HairItems);
-		Wardrobe->Outfits.AddUnique(Builder.Outfit(OutfitName, Items));
-		StartState = OutfitName;
+		if (UDTHOutfit* Outfit = Builder.Outfit(OutfitName, Items))
+		{
+			Wardrobe->Outfits.AddUnique(Outfit);
+			StartState = OutfitName;
+		}
 	}
 	else if (HairItems.Num() > 0)
 	{
@@ -442,8 +473,11 @@ void DTHImport::BuildWardrobe(const FDTHExport& Export, const FString& Folder, U
 	}
 	if (bBaseImport)
 	{
-		Wardrobe->Outfits.AddUnique(Builder.Outfit(TEXT("Nude"), HairItems));
-		if (StartState.IsEmpty()) StartState = TEXT("Nude");
+		if (UDTHOutfit* Nude = Builder.Outfit(TEXT("Nude"), HairItems))
+		{
+			Wardrobe->Outfits.AddUnique(Nude);
+			if (StartState.IsEmpty()) StartState = TEXT("Nude");
+		}
 	}
 	Wardrobe->MarkPackageDirty();
 	Report.Info(FText::Format(LOCTEXT("WardrobeDone", "Wardrobe {0}: {1} outfits, {2} base items, {3} extra items; {4} new items."),

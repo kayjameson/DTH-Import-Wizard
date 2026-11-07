@@ -39,13 +39,15 @@ public:
 	 * SkeletonOverride imports onto another skeleton (empty: the one the export targets). bAddToCharacter adds the
 	 * export's garments and grooms to the character already in DestinationFolder as outfit OutfitName (empty: from the
 	 * garment names), after checking its body is the character's. Everything goes into the character's wardrobe and
-	 * BP_<Character>.
+	 * BP_<Character>. Before anything is made, assets of another kind at the paths it writes stop the import;
+	 * bDeleteOldWardrobe deletes those in DestinationFolder/Wardrobe (an older wardrobe) instead.
+	 * bJigglePhysics adds morph-driven jiggle physics to the post-process blueprint, for exports that have it.
 	 * Returns the run's messages; errors start with "ERROR:", warnings with "WARNING:".
 	 */
 	UFUNCTION(BlueprintCallable, Category = "DTH Import Wizard")
 	static TArray<FString> ImportCharacter(const FString& ExportFolder, const FString& DestinationFolder, bool bIncludeUnlisted = false,
 		bool bReimportExistingMeshes = false, const FString& SkeletonOverride = TEXT(""), bool bAddToCharacter = false,
-		const FString& OutfitName = TEXT(""));
+		const FString& OutfitName = TEXT(""), bool bDeleteOldWardrobe = false, bool bJigglePhysics = false);
 
 	/**
 	 * What the import set up on a skeletal mesh: post-process blueprint, deformer, registered curves (with their

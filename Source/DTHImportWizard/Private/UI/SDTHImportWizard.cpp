@@ -267,7 +267,18 @@ TSharedRef<SWidget> SDTHImportWizard::MakeMeshesPage()
 						[
 							SNew(STextBlock).Text(LOCTEXT("Reimport", "Reimport existing meshes and grooms"))
 						]
-					])
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.f, 0.f, 0.f, 0.f)
+						[
+							SNew(SCheckBox)
+							.IsEnabled_Lambda([this]() { return Export && Export->HasPhysics() && !bAddToCharacter; })
+							.IsChecked_Lambda([this]() { return bJigglePhysics ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+							.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { bJigglePhysics = State == ECheckBoxState::Checked; })
+							.ToolTipText(LOCTEXT("JiggleTip", "Add morph-driven jiggle physics to the character's post-process blueprint: spring controllers on the physics bones and the exported pose drivers. Available for Genesis 9 exports with a PHY pose asset and pose driver code."))
+							[
+								SNew(STextBlock).Text(LOCTEXT("Jiggle", "Jiggle physics (Genesis 9)"))
+							]
+						])
 			]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 8.f)
@@ -296,6 +307,16 @@ TSharedRef<SWidget> SDTHImportWizard::MakeMeshesPage()
 							.ToolTipText(LOCTEXT("AddOnTip", "This export is another outfit or hair for the character already in the Content Folder, made from its own Houdini file. Its body is checked against the character's and not imported; its garments and grooms go on the character's body and into its wardrobe. Retargeting, pose assets and the control rig are left as they are."))
 							[
 								SNew(STextBlock).Text(LOCTEXT("AddOn", "Add to an existing character"))
+							]
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.f, 0.f, 0.f, 0.f)
+						[
+							SNew(SCheckBox)
+							.IsChecked_Lambda([this]() { return bDeleteOldWardrobe ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+							.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { bDeleteOldWardrobe = State == ECheckBoxState::Checked; })
+							.ToolTipText(LOCTEXT("DeleteOldTip", "The Content Folder's Wardrobe folder belongs to the import's wardrobe. When it holds anything else (an older wardrobe, e.g. the Python wizard's), the import stops before it starts. Tick this to have it delete those assets instead; anything that used them (such as an old character blueprint) loses those references."))
+							[
+								SNew(STextBlock).Text(LOCTEXT("DeleteOld", "Delete the old wardrobe"))
 							]
 						]
 					]
@@ -980,6 +1001,8 @@ FReply SDTHImportWizard::OnImport()
 	Request.bReimportExistingMeshes = bReimportExistingMeshes;
 	Request.bAddToCharacter = bAddToCharacter;
 	Request.OutfitName = OutfitName;
+	Request.bDeleteOldWardrobe = bDeleteOldWardrobe;
+	Request.bJigglePhysics = bJigglePhysics && Export && Export->HasPhysics();
 	Request.MaterialPlans = MaterialPlans;
 	Request.GroomPlans = GroomPlans;
 	for (const TSharedPtr<FMeshRow>& Row : MeshRows)

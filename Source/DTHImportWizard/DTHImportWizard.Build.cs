@@ -32,6 +32,7 @@ public class DTHImportWizard : ModuleRules
 			"SkeletalMeshEditor",
 			"MaterialEditor",
 			"AnimGraph",
+			"AnimGraphRuntime",
 			"BlueprintGraph",
 			"FBX",
 			"ControlRig",

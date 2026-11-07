@@ -70,6 +70,8 @@ public:
 	TArray<FDTHPoseAssetEntry> PoseAssets;
 	TArray<FDTHCurveFile> CurveFiles;
 	TArray<FDTHGroomEntry> Grooms;
+	/** The Pose Driver text files in Pose Drivers/Phys, one per PHY group. The manifest doesn't list them. */
+	TArray<FString> PhysicsDriverFiles;
 
 	/** The manifest's body mesh, or null. */
 	const FDTHMeshEntry* FindBody() const;
@@ -77,10 +79,13 @@ public:
 	bool TargetsMannequin() const;
 	bool UsesDualQuaternionSkinning() const;
 	bool IsGenesis9() const;
+	/** A Genesis 9 export with what jiggle physics needs: a PHY pose asset and its pose driver files. */
+	bool HasPhysics() const;
 
 private:
 	FString Resolve(const FString& ManifestPath, const TCHAR* SubFolder) const;
 	bool Parse(const FString& Json, FString& OutError);
 	void AddUnlistedMeshes();
 	void FindGrooms();
+	void FindPhysicsDrivers();
 };
