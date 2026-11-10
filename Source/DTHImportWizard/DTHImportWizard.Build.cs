@@ -31,6 +31,8 @@ public class DTHImportWizard : ModuleRules
 			"AssetTools",
 			"SkeletalMeshEditor",
 			"MaterialEditor",
+			"RHI",
+			"RenderCore",
 			"AnimGraph",
 			"AnimGraphRuntime",
 			"BlueprintGraph",

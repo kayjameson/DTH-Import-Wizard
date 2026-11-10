@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 6,
-	"VersionName": "0.5.0",
+	"Version": 7,
+	"VersionName": "0.5.1",
 	"FriendlyName": "DTH Import Wizard",
 	"Description": "One-click import of DazToHue (Houdini) character exports: meshes, post-process setup, curves, retargeting, control rig, materials, grooms, and a character blueprint with a wardrobe that further outfit and hair exports add to.",
 	"Category": "Pipeline",

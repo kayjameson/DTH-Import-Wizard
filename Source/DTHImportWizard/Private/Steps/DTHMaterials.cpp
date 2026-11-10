@@ -8,6 +8,7 @@
 #include "Export/DTHExport.h"
 #include "Factories/MaterialInstanceConstantFactoryNew.h"
 #include "MaterialEditingLibrary.h"
+#include "MaterialShared.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionAdd.h"
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
@@ -32,6 +33,20 @@ namespace
 			Out.AppendChar(FChar::IsAlnum(Char) || Char == TEXT('_') ? Char : TEXT('_'));
 		}
 		return Out;
+	}
+
+	/**
+	 * Gives Instance a new parent and recaches everything that depends on it, including dynamic instances made from
+	 * it by actors in the level. UMaterialEditingLibrary::SetMaterialInstanceParent uses an update context with
+	 * nothing added to it, so those dynamic instances keep uniform expressions cached against the old parent's
+	 * shader map, and the renderer stops the editor the next time it draws them (reimporting a character that is
+	 * placed in the open level).
+	 */
+	void Reparent(UMaterialInstanceConstant* Instance, UMaterialInterface* NewParent)
+	{
+		FMaterialUpdateContext Context;
+		Instance->SetParentEditorOnly(NewParent);
+		Context.AddMaterialInstance(Instance);
 	}
 
 	/** The slot material IS the per-character copy for these families, as the DTH importer does. */
@@ -168,7 +183,7 @@ namespace
 				if (!Dithered) return nullptr;
 				if (Master->Parent != Dithered)
 				{
-					UMaterialEditingLibrary::SetMaterialInstanceParent(Master, Dithered);
+					Reparent(Master, Dithered);
 					Master->MarkPackageDirty();
 				}
 			}
@@ -188,7 +203,7 @@ namespace
 			}
 			else if (Instance->Parent != Master)
 			{
-				UMaterialEditingLibrary::SetMaterialInstanceParent(Instance, Master);
+				Reparent(Instance, Master);
 			}
 
 			TArray<FName> Parameters, Switches;
@@ -335,16 +350,23 @@ TMap<FString, UMaterialInstanceConstant*> DTHImport::BuildMaterials(const FDTHEx
 {
 	FString Folder = DestinationFolder;
 	Folder.RemoveFromEnd(TEXT("/"));
-	FMaterialBuilder Builder(Export, Folder, Report);
 	TMap<FString, UMaterialInstanceConstant*> Made;
-	for (const FDTHMaterialPlan& Plan : Plans)
 	{
-		if (UMaterialInstanceConstant* Instance = Builder.Build(Plan))
+		// While the materials are rebuilt, the level's components have no render state, so nothing is drawn with a
+		// half-updated material (texture imports run engine work mid-step). At the end of the scope every instance that
+		// depends on a material made here, dynamic ones included, is recached before the components are drawn again.
+		FMaterialUpdateContext Context;
+		FMaterialBuilder Builder(Export, Folder, Report);
+		for (const FDTHMaterialPlan& Plan : Plans)
 		{
-			Made.Add(Plan.Slot, Instance);
+			if (UMaterialInstanceConstant* Instance = Builder.Build(Plan))
+			{
+				Made.Add(Plan.Slot, Instance);
+				Context.AddMaterialInstance(Instance);
+			}
 		}
+		Builder.Finish();
 	}
-	Builder.Finish();
 	return Made;
 }
 
